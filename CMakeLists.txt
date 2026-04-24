@@ -39,19 +39,13 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 add_executable(move_target src/move_target.cpp)
-add_executable(drive_robot src/drive_robot.cpp)
-add_executable(image_viewer src/image_viewer.cpp)
-add_executable(image_viewer_3d src/image_viewer_3d.cpp)
 add_executable(motion_validator src/motion_validator.cpp)
 add_executable(color_detector_node src/color_detector_node.cpp)
 add_executable(target_fusion_node src/target_fusion_node.cpp)
 add_executable(target_controller_node src/target_controller_node.cpp)
 add_executable(target_debug_viewer_node src/target_debug_viewer_node.cpp)
 ament_target_dependencies(move_target rclcpp )
-ament_target_dependencies(drive_robot rclcpp geometry_msgs)
-ament_target_dependencies(image_viewer rclcpp sensor_msgs cv_bridge message_filters geometry_msgs)
 ament_target_dependencies(motion_validator rclcpp sensor_msgs geometry_msgs)
-ament_target_dependencies(image_viewer_3d rclcpp sensor_msgs cv_bridge message_filters geometry_msgs)
 ament_target_dependencies(color_detector_node rclcpp sensor_msgs cv_bridge std_msgs)
 ament_target_dependencies(target_fusion_node rclcpp sensor_msgs std_msgs)
 ament_target_dependencies(target_controller_node rclcpp geometry_msgs std_msgs)
@@ -69,8 +63,6 @@ target_link_libraries(move_target
   gz-msgs10::gz-msgs10
 )
 
-target_link_libraries(image_viewer ${OpenCV_LIBS})
-target_link_libraries(image_viewer_3d ${OpenCV_LIBS})
 target_link_libraries(color_detector_node ${OpenCV_LIBS})
 target_link_libraries(target_debug_viewer_node ${OpenCV_LIBS})
 
@@ -83,16 +75,6 @@ target_link_libraries(target_debug_viewer_node "${cpp_typesupport_target}")
 install(TARGETS move_target 
   DESTINATION lib/${PROJECT_NAME}
 )
-
-install(TARGETS drive_robot 
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-install(TARGETS image_viewer
-  DESTINATION lib/${PROJECT_NAME})
-
-install(TARGETS image_viewer_3d
-  DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS motion_validator
   DESTINATION lib/${PROJECT_NAME})
