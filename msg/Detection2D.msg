@@ -1,0 +1,11 @@
+std_msgs/Header header
+bool found
+int32 x
+int32 y
+int32 width
+int32 height
+float32 center_x
+float32 center_y
+int32 cell_x
+int32 cell_y
+float32 score
