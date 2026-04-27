@@ -5,6 +5,9 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+option(BUILD_COLOR_DETECTOR "Build HSV color detector node" ON)
+option(BUILD_NN_DETECTOR "Build YOLO ONNX detector node" ON)
+
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
@@ -40,16 +43,31 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 add_executable(move_target src/move_target.cpp)
 add_executable(motion_validator src/motion_validator.cpp)
-add_executable(color_detector_node src/color_detector_node.cpp)
 add_executable(target_fusion_node src/target_fusion_node.cpp)
 add_executable(target_controller_node src/target_controller_node.cpp)
 add_executable(target_debug_viewer_node src/target_debug_viewer_node.cpp)
+
+if(BUILD_COLOR_DETECTOR)
+  add_executable(color_detector_node src/color_detector_node.cpp)
+endif()
+
+if(BUILD_NN_DETECTOR)
+  add_executable(nn_person_detector_node src/nn_person_detector_node.cpp)
+endif()
+
 ament_target_dependencies(move_target rclcpp )
 ament_target_dependencies(motion_validator rclcpp sensor_msgs geometry_msgs)
-ament_target_dependencies(color_detector_node rclcpp sensor_msgs cv_bridge std_msgs)
 ament_target_dependencies(target_fusion_node rclcpp sensor_msgs std_msgs)
 ament_target_dependencies(target_controller_node rclcpp geometry_msgs std_msgs)
 ament_target_dependencies(target_debug_viewer_node rclcpp sensor_msgs cv_bridge std_msgs)
+
+if(BUILD_COLOR_DETECTOR)
+  ament_target_dependencies(color_detector_node rclcpp sensor_msgs cv_bridge std_msgs)
+endif()
+
+if(BUILD_NN_DETECTOR)
+  ament_target_dependencies(nn_person_detector_node rclcpp sensor_msgs cv_bridge std_msgs)
+endif()
 
 include_directories(${OpenCV_INCLUDE_DIRS})
 include_directories(include)
@@ -63,14 +81,28 @@ target_link_libraries(move_target
   gz-msgs10::gz-msgs10
 )
 
-target_link_libraries(color_detector_node ${OpenCV_LIBS})
 target_link_libraries(target_debug_viewer_node ${OpenCV_LIBS})
 
+if(BUILD_COLOR_DETECTOR)
+  target_link_libraries(color_detector_node ${OpenCV_LIBS})
+endif()
+
+if(BUILD_NN_DETECTOR)
+  target_link_libraries(nn_person_detector_node ${OpenCV_LIBS})
+endif()
+
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
-target_link_libraries(color_detector_node "${cpp_typesupport_target}")
 target_link_libraries(target_fusion_node "${cpp_typesupport_target}")
 target_link_libraries(target_controller_node "${cpp_typesupport_target}")
 target_link_libraries(target_debug_viewer_node "${cpp_typesupport_target}")
+
+if(BUILD_COLOR_DETECTOR)
+  target_link_libraries(color_detector_node "${cpp_typesupport_target}")
+endif()
+
+if(BUILD_NN_DETECTOR)
+  target_link_libraries(nn_person_detector_node "${cpp_typesupport_target}")
+endif()
 
 install(TARGETS move_target 
   DESTINATION lib/${PROJECT_NAME}
@@ -79,8 +111,15 @@ install(TARGETS move_target
 install(TARGETS motion_validator
   DESTINATION lib/${PROJECT_NAME})
 
-install(TARGETS color_detector_node
-  DESTINATION lib/${PROJECT_NAME})
+if(BUILD_COLOR_DETECTOR)
+  install(TARGETS color_detector_node
+    DESTINATION lib/${PROJECT_NAME})
+endif()
+
+if(BUILD_NN_DETECTOR)
+  install(TARGETS nn_person_detector_node
+    DESTINATION lib/${PROJECT_NAME})
+endif()
 
 install(TARGETS target_fusion_node
   DESTINATION lib/${PROJECT_NAME})
@@ -95,6 +134,10 @@ install(DIRECTORY include/
   DESTINATION include)
 
 install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+  OPTIONAL)
+
+install(DIRECTORY models
   DESTINATION share/${PROJECT_NAME}
   OPTIONAL)
 

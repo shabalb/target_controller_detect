@@ -1,9 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -14,11 +12,6 @@ def generate_launch_description():
     image_height = LaunchConfiguration("image_height")
     camera_fov = LaunchConfiguration("camera_fov")
 
-    use_nn_detector = LaunchConfiguration("use_nn_detector")
-    detector_model_path = LaunchConfiguration("detector_model_path")
-    detector_backend = LaunchConfiguration("detector_backend")
-    detector_target = LaunchConfiguration("detector_target")
-
     return LaunchDescription(
         [
             DeclareLaunchArgument("camera_topic", default_value="/oak/rgb/image_raw"),
@@ -27,45 +20,15 @@ def generate_launch_description():
             DeclareLaunchArgument("image_width", default_value="640"),
             DeclareLaunchArgument("image_height", default_value="400"),
             DeclareLaunchArgument("camera_fov", default_value="1.255"),
-            DeclareLaunchArgument("use_nn_detector", default_value="false"),
-            DeclareLaunchArgument(
-                "detector_model_path",
-                default_value=PathJoinSubstitution(
-                    [FindPackageShare("target_controller_detect"), "models", "yolov8n.onnx"]
-                ),
-            ),
-            DeclareLaunchArgument("detector_backend", default_value="opencv"),
-            DeclareLaunchArgument("detector_target", default_value="cpu"),
             Node(
                 package="target_controller_detect",
                 executable="color_detector_node",
                 name="color_detector_node",
                 output="screen",
-                condition=UnlessCondition(use_nn_detector),
                 parameters=[
                     {
                         "camera_topic": camera_topic,
                         "detection_topic": "/target/detection2d",
-                    }
-                ],
-            ),
-            Node(
-                package="target_controller_detect",
-                executable="nn_person_detector_node",
-                name="nn_person_detector_node",
-                output="screen",
-                condition=IfCondition(use_nn_detector),
-                parameters=[
-                    {
-                        "camera_topic": camera_topic,
-                        "detection_topic": "/target/detection2d",
-                        "model_path": detector_model_path,
-                        "input_width": 640,
-                        "input_height": 640,
-                        "conf_threshold": 0.40,
-                        "nms_threshold": 0.45,
-                        "dnn_backend": detector_backend,
-                        "dnn_target": detector_target,
                     }
                 ],
             ),
