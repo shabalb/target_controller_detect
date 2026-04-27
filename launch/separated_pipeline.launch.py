@@ -13,6 +13,7 @@ def generate_launch_description():
     image_width = LaunchConfiguration("image_width")
     image_height = LaunchConfiguration("image_height")
     camera_fov = LaunchConfiguration("camera_fov")
+    debug = LaunchConfiguration("debug")
 
     use_nn_detector = LaunchConfiguration("use_nn_detector")
     detector_model_path = LaunchConfiguration("detector_model_path")
@@ -24,9 +25,10 @@ def generate_launch_description():
             DeclareLaunchArgument("camera_topic", default_value="/oak/rgb/image_raw"),
             DeclareLaunchArgument("depth_topic", default_value="/oak/stereo/depth"),
             DeclareLaunchArgument("point_cloud_topic", default_value="/oak/stereo/depth/points"),
-            DeclareLaunchArgument("image_width", default_value="640"),
-            DeclareLaunchArgument("image_height", default_value="400"),
+            DeclareLaunchArgument("image_width", default_value="960"),
+            DeclareLaunchArgument("image_height", default_value="540"),
             DeclareLaunchArgument("camera_fov", default_value="1.255"),
+            DeclareLaunchArgument("debug", default_value="false"),
             DeclareLaunchArgument("use_nn_detector", default_value="false"),
             DeclareLaunchArgument(
                 "detector_model_path",
@@ -46,6 +48,7 @@ def generate_launch_description():
                     {
                         "camera_topic": camera_topic,
                         "detection_topic": "/target/detection2d",
+                        "show_windows": debug,
                     }
                 ],
             ),
@@ -66,6 +69,7 @@ def generate_launch_description():
                         "nms_threshold": 0.45,
                         "dnn_backend": detector_backend,
                         "dnn_target": detector_target,
+                        "show_windows": debug,
                     }
                 ],
             ),
@@ -103,6 +107,7 @@ def generate_launch_description():
                 executable="target_debug_viewer_node",
                 name="target_debug_viewer_node",
                 output="screen",
+                condition=IfCondition(debug),
                 parameters=[
                     {
                         "camera_topic": camera_topic,

@@ -34,6 +34,9 @@ DEFAULT_PORT = 5600
 CAM_WIDTH = 1920
 CAM_HEIGHT = 1080
 CAM_FPS = 60
+ROS_IMAGE_WIDTH = 960
+ROS_IMAGE_HEIGHT = 540
+ROS_IMAGE_FPS = 10
 DEPTH_WIDTH = 640
 DEPTH_HEIGHT = 400
 DEPTH_FPS = 30
@@ -67,7 +70,14 @@ def build_gst_pipeline(host: str, port: int, width: int, height: int, fps: int) 
     )
 
 
-def build_depthai_pipeline(width: int, height: int, fps: int):
+def build_depthai_pipeline(
+    video_width: int,
+    video_height: int,
+    video_fps: int,
+    image_width: int,
+    image_height: int,
+    image_fps: int,
+):
     """
     DepthAI v3 API:
     - Camera().build() вместо setBoardSocket/setSize
@@ -78,19 +88,19 @@ def build_depthai_pipeline(width: int, height: int, fps: int):
 
     cam = pipeline.create(dai.node.Camera).build(
         boardSocket=dai.CameraBoardSocket.CAM_A,
-        sensorFps=float(fps),
+        sensorFps=float(video_fps),
     )
 
     # requestOutput возвращает выход нужного размера и формата.
     # NV12 — нативный формат ISP, идеален для аппаратного энкодера.
     video_out = cam.requestOutput(
-        size=(width, height),
+        size=(video_width, video_height),
         type=dai.ImgFrame.Type.NV12,
     )
     image_out = cam.requestOutput(
-        size=(width, height),
+        size=(image_width, image_height),
         type=dai.ImgFrame.Type.BGR888i,
-        fps=float(fps),
+        fps=float(image_fps),
     )
 
     left = pipeline.create(dai.node.Camera).build(
@@ -144,7 +154,7 @@ def get_frame_size(frame_msg, default_width: int, default_height: int) -> tuple[
 
 
 def build_image_msg(frame_msg, stamp, frame_id: str) -> Image:
-    width, height = get_frame_size(frame_msg, CAM_WIDTH, CAM_HEIGHT)
+    width, height = get_frame_size(frame_msg, ROS_IMAGE_WIDTH, ROS_IMAGE_HEIGHT)
     data = bytes(frame_msg.getData())
 
     msg = Image()
@@ -178,11 +188,23 @@ def build_depth_msg(frame_msg, stamp, frame_id: str) -> Image:
 class OakGstSender:
     """Captures from OAK (v3 API), pushes frames into GStreamer appsrc."""
 
-    def __init__(self, host: str, port: int, image_topic: str, depth_topic: str):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        image_topic: str,
+        depth_topic: str,
+        image_width: int,
+        image_height: int,
+        image_fps: int,
+    ):
         self.host = host
         self.port = port
         self.image_topic = image_topic
         self.depth_topic = depth_topic
+        self.image_width = image_width
+        self.image_height = image_height
+        self.image_fps = image_fps
         self.running = False
         self._gst_pipeline = None
         self._appsrc = None
@@ -212,7 +234,10 @@ class OakGstSender:
         self._depth_pub = self._ros_node.create_publisher(
             Image, self.depth_topic, qos
         )
-        print(f"[ROS2] Publishing RGB image: {self.image_topic} (bgr8)")
+        print(
+            f"[ROS2] Publishing RGB image: {self.image_topic} "
+            f"(bgr8, {self.image_width}x{self.image_height}@{self.image_fps})"
+        )
         print(f"[ROS2] Publishing depth: {self.depth_topic} (16UC1, mm)")
 
         # ── GStreamer pipeline ──
@@ -238,7 +263,14 @@ class OakGstSender:
             self._video_queue,
             self._image_queue,
             self._depth_queue,
-        ) = build_depthai_pipeline(CAM_WIDTH, CAM_HEIGHT, CAM_FPS)
+        ) = build_depthai_pipeline(
+            CAM_WIDTH,
+            CAM_HEIGHT,
+            CAM_FPS,
+            self.image_width,
+            self.image_height,
+            self.image_fps,
+        )
         self._dai_pipeline.start()
         print("[DepthAI] Pipeline started, capturing...")
 
@@ -369,9 +401,35 @@ def main():
         default=DEFAULT_DEPTH_TOPIC,
         help=f"ROS2 depth topic (default: {DEFAULT_DEPTH_TOPIC})",
     )
+    parser.add_argument(
+        "--image-width",
+        type=int,
+        default=ROS_IMAGE_WIDTH,
+        help=f"ROS2 RGB image width (default: {ROS_IMAGE_WIDTH})",
+    )
+    parser.add_argument(
+        "--image-height",
+        type=int,
+        default=ROS_IMAGE_HEIGHT,
+        help=f"ROS2 RGB image height (default: {ROS_IMAGE_HEIGHT})",
+    )
+    parser.add_argument(
+        "--image-fps",
+        type=int,
+        default=ROS_IMAGE_FPS,
+        help=f"ROS2 RGB image FPS (default: {ROS_IMAGE_FPS})",
+    )
     args = parser.parse_args()
 
-    sender = OakGstSender(args.host, args.port, args.image_topic, args.depth_topic)
+    sender = OakGstSender(
+        args.host,
+        args.port,
+        args.image_topic,
+        args.depth_topic,
+        args.image_width,
+        args.image_height,
+        args.image_fps,
+    )
 
     def sig_handler(signum, frame):
         sender.running = False

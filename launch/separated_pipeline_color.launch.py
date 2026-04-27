@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -11,15 +12,17 @@ def generate_launch_description():
     image_width = LaunchConfiguration("image_width")
     image_height = LaunchConfiguration("image_height")
     camera_fov = LaunchConfiguration("camera_fov")
+    debug = LaunchConfiguration("debug")
 
     return LaunchDescription(
         [
             DeclareLaunchArgument("camera_topic", default_value="/oak/rgb/image_raw"),
             DeclareLaunchArgument("depth_topic", default_value="/oak/stereo/depth"),
             DeclareLaunchArgument("point_cloud_topic", default_value="/oak/stereo/depth/points"),
-            DeclareLaunchArgument("image_width", default_value="640"),
-            DeclareLaunchArgument("image_height", default_value="400"),
+            DeclareLaunchArgument("image_width", default_value="960"),
+            DeclareLaunchArgument("image_height", default_value="540"),
             DeclareLaunchArgument("camera_fov", default_value="1.255"),
+            DeclareLaunchArgument("debug", default_value="false"),
             Node(
                 package="target_controller_detect",
                 executable="color_detector_node",
@@ -29,6 +32,7 @@ def generate_launch_description():
                     {
                         "camera_topic": camera_topic,
                         "detection_topic": "/target/detection2d",
+                        "show_windows": debug,
                     }
                 ],
             ),
@@ -66,6 +70,7 @@ def generate_launch_description():
                 executable="target_debug_viewer_node",
                 name="target_debug_viewer_node",
                 output="screen",
+                condition=IfCondition(debug),
                 parameters=[
                     {
                         "camera_topic": camera_topic,

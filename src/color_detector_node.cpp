@@ -11,15 +11,12 @@
 #include "target_controller_detect/detector_utils.hpp"
 #include "target_controller_detect/msg/detection2_d.hpp"
 
-namespace {
-constexpr bool kShowWindows = true;
-}
-
 class ColorDetectorNode : public rclcpp::Node {
 public:
   ColorDetectorNode() : Node("color_detector_node") {
     const auto camera_topic = declare_parameter<std::string>("camera_topic", "/camera/image");
     detection_topic_ = declare_parameter<std::string>("detection_topic", "/target/detection2d");
+    show_windows_ = declare_parameter<bool>("show_windows", false);
 
     rclcpp::QoS qos(rclcpp::KeepLast(20));
     qos.best_effort();
@@ -29,7 +26,7 @@ public:
     image_sub_ = create_subscription<sensor_msgs::msg::Image>(
       camera_topic, qos, std::bind(&ColorDetectorNode::onImage, this, std::placeholders::_1));
 
-    if (kShowWindows) {
+    if (show_windows_) {
       cv::namedWindow("detector_camera", cv::WINDOW_NORMAL);
     }
 
@@ -38,7 +35,7 @@ public:
   }
 
   ~ColorDetectorNode() override {
-    if (kShowWindows) {
+    if (show_windows_) {
       cv::destroyWindow("detector_camera");
     }
   }
@@ -68,7 +65,7 @@ private:
       auto detection = target_controller_detect::detectRedTarget(bgr, msg->header);
       detection_pub_->publish(detection);
 
-      if (kShowWindows) {
+      if (show_windows_) {
         if (detection.found) {
           cv::rectangle(
             bgr, cv::Rect(detection.x, detection.y, detection.width, detection.height),
@@ -103,6 +100,7 @@ private:
   }
 
   std::string detection_topic_;
+  bool show_windows_{false};
   rclcpp::Publisher<target_controller_detect::msg::Detection2D>::SharedPtr detection_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
 };
