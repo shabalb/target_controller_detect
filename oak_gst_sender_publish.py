@@ -19,6 +19,7 @@ import time
 
 import depthai as dai
 import gi
+import numpy as np
 import rclpy
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import Image
@@ -33,9 +34,9 @@ DEFAULT_HOST = "192.168.1.100"
 DEFAULT_PORT = 5600
 CAM_WIDTH = 1920
 CAM_HEIGHT = 1080
-CAM_FPS = 60
-ROS_IMAGE_WIDTH = 960
-ROS_IMAGE_HEIGHT = 540
+CAM_FPS = 30
+ROS_IMAGE_WIDTH = 640
+ROS_IMAGE_HEIGHT = 480
 ROS_IMAGE_FPS = 10
 DEPTH_WIDTH = 640
 DEPTH_HEIGHT = 400
@@ -47,6 +48,13 @@ RGB_FRAME_ID = "oak_rgb_camera_optical_frame"
 DEPTH_FRAME_ID = "oak_depth_camera_optical_frame"
 
 
+def ensure_depth_output_size(width: int, height: int) -> None:
+    if width % 16 != 0:
+        raise ValueError(f"DEPTH_WIDTH must be multiple of 16, got {width}")
+    if height <= 0:
+        raise ValueError(f"DEPTH_HEIGHT must be positive, got {height}")
+
+
 def build_gst_pipeline(host: str, port: int, width: int, height: int, fps: int) -> str:
     """
     GStreamer pipeline string.
@@ -54,12 +62,13 @@ def build_gst_pipeline(host: str, port: int, width: int, height: int, fps: int) 
     mpph264enc — аппаратный H.264 энкодер Rockchip MPP.
     """
     return (
-        f"appsrc name=source is-live=true block=true do-timestamp=true "
+        f"appsrc name=source is-live=true block=false do-timestamp=true "
+        f"  max-buffers=2 leaky-type=downstream "
         f"  format=time "
         f'  caps=video/x-raw,format=NV12,width={width},height={height},framerate={fps}/1 '
         f"! mpph264enc "
-        f"    bps={8_000_000} "
-        f"    bps-max={10_000_000} "
+        f"    bps={4_000_000} "
+        f"    bps-max={6_000_000} "
         f"    rc-mode=cbr "
         f"    gop={fps} "
         f"    header-mode=1 "
@@ -74,9 +83,6 @@ def build_depthai_pipeline(
     video_width: int,
     video_height: int,
     video_fps: int,
-    image_width: int,
-    image_height: int,
-    image_fps: int,
 ):
     """
     DepthAI v3 API:
@@ -84,6 +90,8 @@ def build_depthai_pipeline(
     - requestOutput() вместо прямого доступа к .isp/.video
     - createOutputQueue() вместо XLinkOut
     """
+    ensure_depth_output_size(DEPTH_WIDTH, DEPTH_HEIGHT)
+
     pipeline = dai.Pipeline()
 
     cam = pipeline.create(dai.node.Camera).build(
@@ -97,11 +105,6 @@ def build_depthai_pipeline(
         size=(video_width, video_height),
         type=dai.ImgFrame.Type.NV12,
     )
-    image_out = cam.requestOutput(
-        size=(image_width, image_height),
-        type=dai.ImgFrame.Type.BGR888i,
-        fps=float(image_fps),
-    )
 
     left = pipeline.create(dai.node.Camera).build(
         boardSocket=dai.CameraBoardSocket.CAM_B,
@@ -113,9 +116,15 @@ def build_depthai_pipeline(
     )
 
     stereo = pipeline.create(dai.node.StereoDepth)
-    stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
+    preset_mode = dai.node.StereoDepth.PresetMode
+    if hasattr(preset_mode, "HIGH_DENSITY"):
+        stereo_preset = preset_mode.HIGH_DENSITY
+    else:
+        stereo_preset = preset_mode.FAST_DENSITY
+    stereo.setDefaultProfilePreset(stereo_preset)
     stereo.setLeftRightCheck(True)
     stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A)
+    stereo.setOutputSize(DEPTH_WIDTH, DEPTH_HEIGHT)
 
     left.requestOutput(
         size=(DEPTH_WIDTH, DEPTH_HEIGHT),
@@ -129,10 +138,9 @@ def build_depthai_pipeline(
     ).link(stereo.right)
 
     video_queue = video_out.createOutputQueue(maxSize=2, blocking=False)
-    image_queue = image_out.createOutputQueue(maxSize=2, blocking=False)
     depth_queue = stereo.depth.createOutputQueue(maxSize=2, blocking=False)
 
-    return pipeline, video_queue, image_queue, depth_queue
+    return pipeline, video_queue, depth_queue
 
 
 def make_sensor_qos() -> QoSProfile:
@@ -154,18 +162,32 @@ def get_frame_size(frame_msg, default_width: int, default_height: int) -> tuple[
 
 
 def build_image_msg(frame_msg, stamp, frame_id: str) -> Image:
-    width, height = get_frame_size(frame_msg, ROS_IMAGE_WIDTH, ROS_IMAGE_HEIGHT)
-    data = bytes(frame_msg.getData())
+    width, height = get_frame_size(frame_msg, CAM_WIDTH, CAM_HEIGHT)
+    nv12 = np.frombuffer(bytes(frame_msg.getData()), dtype=np.uint8)
+    expected_size = width * height * 3 // 2
+    if nv12.size < expected_size:
+        raise ValueError(
+            f"NV12 frame is too small: {nv12.size} bytes, expected {expected_size}"
+        )
+
+    nv12 = nv12[:expected_size].reshape((height * 3 // 2, width))
+    y_plane = nv12[:height, :]
+    scale_x = max(width // ROS_IMAGE_WIDTH, 1)
+    scale_y = max(height // ROS_IMAGE_HEIGHT, 1)
+    y_plane = y_plane[::scale_y, ::scale_x]
+    y_plane = y_plane[:ROS_IMAGE_HEIGHT, :ROS_IMAGE_WIDTH]
+    width = y_plane.shape[1]
+    height = y_plane.shape[0]
 
     msg = Image()
     msg.header.stamp = stamp
     msg.header.frame_id = frame_id
     msg.height = height
     msg.width = width
-    msg.encoding = "bgr8"
+    msg.encoding = "mono8"
     msg.is_bigendian = 0
-    msg.step = width * 3
-    msg.data = data
+    msg.step = width
+    msg.data = y_plane.tobytes()
     return msg
 
 
@@ -207,10 +229,10 @@ class OakGstSender:
         self.image_fps = image_fps
         self.running = False
         self._gst_pipeline = None
+        self._gst_bus = None
         self._appsrc = None
         self._dai_pipeline = None
         self._video_queue = None
-        self._image_queue = None
         self._depth_queue = None
         self._ros_node = None
         self._image_pub = None
@@ -219,6 +241,9 @@ class OakGstSender:
         self._image_count = 0
         self._depth_count = 0
         self._last_stats_frame_count = 0
+        self._last_status_time = 0.0
+        self._last_image_publish_time = 0.0
+        self._reported_video_format = False
         self._start_time = 0.0
 
     def start(self):
@@ -236,7 +261,7 @@ class OakGstSender:
         )
         print(
             f"[ROS2] Publishing RGB image: {self.image_topic} "
-            f"(bgr8, {self.image_width}x{self.image_height}@{self.image_fps})"
+            f"(mono8 luma, {self.image_width}x{self.image_height}@{self.image_fps})"
         )
         print(f"[ROS2] Publishing depth: {self.depth_topic} (16UC1, mm)")
 
@@ -249,10 +274,10 @@ class OakGstSender:
         self._gst_pipeline = Gst.parse_launch(pipeline_str)
         self._appsrc = self._gst_pipeline.get_by_name("source")
 
-        bus = self._gst_pipeline.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message::error", self._on_gst_error)
-        bus.connect("message::eos", self._on_gst_eos)
+        self._gst_bus = self._gst_pipeline.get_bus()
+        self._gst_bus.add_signal_watch()
+        self._gst_bus.connect("message::error", self._on_gst_error)
+        self._gst_bus.connect("message::eos", self._on_gst_eos)
 
         self._gst_pipeline.set_state(Gst.State.PLAYING)
         print("[GStreamer] Pipeline PLAYING")
@@ -261,15 +286,11 @@ class OakGstSender:
         (
             self._dai_pipeline,
             self._video_queue,
-            self._image_queue,
             self._depth_queue,
         ) = build_depthai_pipeline(
             CAM_WIDTH,
             CAM_HEIGHT,
             CAM_FPS,
-            self.image_width,
-            self.image_height,
-            self.image_fps,
         )
         self._dai_pipeline.start()
         print("[DepthAI] Pipeline started, capturing...")
@@ -280,19 +301,29 @@ class OakGstSender:
         self._image_count = 0
         self._depth_count = 0
         self._last_stats_frame_count = 0
+        self._last_status_time = self._start_time
+        self._last_image_publish_time = 0.0
+        self._reported_video_format = False
 
         # ── Capture loop ──
         try:
             while self.running and self._dai_pipeline.isRunning():
                 rclpy.spin_once(self._ros_node, timeout_sec=0.0)
+                self._poll_gst_bus()
 
                 frame_msg = self._video_queue.tryGet()
-                image_msg = self._image_queue.tryGet()
                 depth_msg = self._depth_queue.tryGet()
 
                 if frame_msg is not None:
                     # getData() returns raw bytes (NV12 from isp output)
                     frame_data = frame_msg.getData()
+                    if not self._reported_video_format:
+                        width, height = get_frame_size(frame_msg, CAM_WIDTH, CAM_HEIGHT)
+                        print(
+                            f"[DepthAI] GST video frame: "
+                            f"{width}x{height}, {len(frame_data)} bytes"
+                        )
+                        self._reported_video_format = True
 
                     # Wrap in GStreamer buffer
                     buf = Gst.Buffer.new_allocate(None, len(frame_data), None)
@@ -313,12 +344,17 @@ class OakGstSender:
 
                     self._frame_count += 1
 
-                now = self._ros_node.get_clock().now().to_msg()
-                if image_msg is not None:
-                    self._image_pub.publish(
-                        build_image_msg(image_msg, now, RGB_FRAME_ID)
-                    )
-                    self._image_count += 1
+                    monotonic_now = time.monotonic()
+                    image_period = 1.0 / max(float(self.image_fps), 1.0)
+                    if monotonic_now - self._last_image_publish_time >= image_period:
+                        now = self._ros_node.get_clock().now().to_msg()
+                        self._image_pub.publish(
+                            build_image_msg(frame_msg, now, RGB_FRAME_ID)
+                        )
+                        self._image_count += 1
+                        self._last_image_publish_time = monotonic_now
+                else:
+                    now = self._ros_node.get_clock().now().to_msg()
 
                 if depth_msg is not None:
                     self._depth_pub.publish(
@@ -326,8 +362,10 @@ class OakGstSender:
                     )
                     self._depth_count += 1
 
-                if frame_msg is None and image_msg is None and depth_msg is None:
+                if frame_msg is None and depth_msg is None:
                     time.sleep(0.001)
+
+                self._print_periodic_status()
 
                 if (
                     self._frame_count
@@ -355,6 +393,9 @@ class OakGstSender:
         if self._gst_pipeline:
             self._gst_pipeline.set_state(Gst.State.NULL)
             print("[GStreamer] Pipeline stopped")
+        if self._gst_bus:
+            self._gst_bus.remove_signal_watch()
+            self._gst_bus = None
         if self._dai_pipeline:
             self._dai_pipeline.stop()
             print("[DepthAI] Pipeline stopped")
@@ -374,6 +415,51 @@ class OakGstSender:
     def _on_gst_eos(self, bus, msg):
         print("[GStreamer] End of stream")
         self.running = False
+
+    def _poll_gst_bus(self):
+        if not self._gst_bus:
+            return
+
+        message_types = (
+            Gst.MessageType.ERROR | Gst.MessageType.WARNING | Gst.MessageType.EOS
+        )
+        while True:
+            msg = self._gst_bus.pop_filtered(message_types)
+            if msg is None:
+                break
+
+            if msg.type == Gst.MessageType.ERROR:
+                err, dbg = msg.parse_error()
+                print(f"[GStreamer ERROR] {err.message}")
+                if dbg:
+                    print(f"  Debug: {dbg}")
+                self.running = False
+                break
+            if msg.type == Gst.MessageType.WARNING:
+                warn, dbg = msg.parse_warning()
+                print(f"[GStreamer WARNING] {warn.message}")
+                if dbg:
+                    print(f"  Debug: {dbg}")
+            elif msg.type == Gst.MessageType.EOS:
+                print("[GStreamer] End of stream")
+                self.running = False
+                break
+
+    def _print_periodic_status(self):
+        now = time.monotonic()
+        if now - self._last_status_time < 2.0:
+            return
+
+        elapsed = max(now - self._start_time, 1e-6)
+        print(
+            f"[Status] gst={self._frame_count} "
+            f"({self._frame_count / elapsed:.1f} fps), "
+            f"rgb={self._image_count}, depth={self._depth_count}, "
+            f"udp={self.host}:{self.port}"
+        )
+        if self._frame_count == 0 and (self._image_count or self._depth_count):
+            print("[Status] ROS frames are flowing, but GST video queue has no frames")
+        self._last_status_time = now
 
 
 def main():
