@@ -24,11 +24,11 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("camera_topic", default_value="/oak/rgb/image_raw"),
             DeclareLaunchArgument("depth_topic", default_value="/oak/stereo/depth"),
-            DeclareLaunchArgument("point_cloud_topic", default_value="/oak/stereo/depth/points"),
-            DeclareLaunchArgument("image_width", default_value="960"),
-            DeclareLaunchArgument("image_height", default_value="540"),
+            DeclareLaunchArgument("point_cloud_topic", default_value="/oak/stereo/depth"),
+            DeclareLaunchArgument("image_width", default_value="640"),
+            DeclareLaunchArgument("image_height", default_value="480"),
             DeclareLaunchArgument("camera_fov", default_value="1.255"),
-            DeclareLaunchArgument("debug", default_value="false"),
+            DeclareLaunchArgument("debug", default_value="true"),
             DeclareLaunchArgument("use_nn_detector", default_value="false"),
             DeclareLaunchArgument(
                 "detector_model_path",

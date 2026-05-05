@@ -43,10 +43,10 @@ public:
     const auto detection_topic =
       declare_parameter<std::string>("detection_topic", "/target/detection2d");
     const auto point_cloud_topic =
-      declare_parameter<std::string>("point_cloud_topic", "/oak/stereo/points");
+      declare_parameter<std::string>("point_cloud_topic", "/oak/stereo/depth");
     state_topic_ = declare_parameter<std::string>("state_topic", "/target/state");
-    image_width_ = declare_parameter<int>("image_width", 960);
-    image_height_ = declare_parameter<int>("image_height", 540);
+    image_width_ = declare_parameter<int>("image_width", 640);
+    image_height_ = declare_parameter<int>("image_height", 480);
     camera_fov_ = declare_parameter<double>("camera_fov", 1.466);
     detection_hold_sec_ = declare_parameter<double>("detection_hold_sec", 0.6);
 
@@ -206,8 +206,8 @@ private:
   }
 
   std::string state_topic_;
-  int image_width_{960};
-  int image_height_{540};
+  int image_width_{640};
+  int image_height_{480};
   double camera_fov_{1.466};
   double detection_hold_sec_{0.6};
 
