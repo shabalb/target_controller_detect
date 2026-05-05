@@ -26,6 +26,11 @@ struct MotionCommand {
   float angular = 0.0f;
 };
 
+class MotionCommandTrack {
+  uint16_t right = 0;
+  uint16_t left = 0;
+};
+
 inline FollowMode decideMode(
   const target_controller_detect::msg::TargetState &target,
   const ControllerConfig &config = {}) {
@@ -51,7 +56,44 @@ inline FollowMode decideMode(
 inline MotionCommand computeCommand(
   const target_controller_detect::msg::TargetState &target,
   const FollowMode mode,
-  const ControllerConfig &config = {}) {
+  const ControllerConfig &config = {}) 
+  {
+  MotionCommandTrack cmd;
+  const float dist_error = target.distance - config.desired_distance;
+  const float angle_error = target.angle;
+
+  switch (mode) {
+    case FollowMode::ALIGN:
+      cmd.angular = -std::clamp(
+        config.ka * angle_error, -config.max_angular, config.max_angular);
+      break;
+    case FollowMode::FOLLOW:
+      if (std::fabs(dist_error) >= config.dist_deadband) {
+        cmd.linear = std::clamp(
+          config.kd * dist_error, -config.max_linear, config.max_linear);
+      }
+      if (std::fabs(angle_error) >= config.angle_follow_deadband) {
+        cmd.angular = -std::clamp(
+          config.ka * angle_error, -config.max_angular, config.max_angular);
+      }
+      break;
+    case FollowMode::STOP:
+      break;
+    case FollowMode::SEARCH:
+    case FollowMode::LOST:
+      cmd.angular = config.lost_search_angular;
+      break;
+  }
+
+  return cmd;
+}
+
+
+inline MotionCommand computeCommandTrack(
+  const target_controller_detect::msg::TargetState &target,
+  const FollowMode mode,
+  const ControllerConfig &config = {}) 
+  {
   MotionCommand cmd;
   const float dist_error = target.distance - config.desired_distance;
   const float angle_error = target.angle;
