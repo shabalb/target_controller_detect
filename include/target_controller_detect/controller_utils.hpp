@@ -14,11 +14,14 @@ struct ControllerConfig {
   float ka = 1.5f;
   float max_linear = 0.3f;
   float max_angular = 0.1f;
+  uint16_t max_linear_track = 2000;
+  uint16_t min_linear_track = 0;
   float desired_distance = 0.7f;
   float dist_deadband = 0.25f;
   float angle_align_deadband = 0.05f;
   float angle_follow_deadband = 0.02f;
   float lost_search_angular = 0.07f;
+  uint16_t lost_left = 500;
 };
 
 struct MotionCommand {
@@ -27,8 +30,9 @@ struct MotionCommand {
 };
 
 class MotionCommandTrack {
-  uint16_t right = 0;
-  uint16_t left = 0;
+  public:
+  uint16_t right = 0;// от 0 до 2000
+  uint16_t left = 0;// от 0 до 2000
 };
 
 inline FollowMode decideMode(
@@ -53,7 +57,7 @@ inline FollowMode decideMode(
   return FollowMode::FOLLOW;
 }
 
-inline MotionCommand computeCommand(
+inline MotionCommandTrack computeCommandTrack(
   const target_controller_detect::msg::TargetState &target,
   const FollowMode mode,
   const ControllerConfig &config = {}) 
@@ -64,24 +68,35 @@ inline MotionCommand computeCommand(
 
   switch (mode) {
     case FollowMode::ALIGN:
-      cmd.angular = -std::clamp(
+      float angle = -std::clamp(
         config.ka * angle_error, -config.max_angular, config.max_angular);
+      if (angle < 0){
+        cmd.right = 1200;
+      }else {
+        cmd.left = 1200;
+      }
       break;
     case FollowMode::FOLLOW:
       if (std::fabs(dist_error) >= config.dist_deadband) {
-        cmd.linear = std::clamp(
-          config.kd * dist_error, -config.max_linear, config.max_linear);
+        cmd.left = cmd.right = std::clamp(
+          (uint16_t)(config.kd * dist_error*1000), config.min_linear_track, config.max_linear_track);
       }
       if (std::fabs(angle_error) >= config.angle_follow_deadband) {
-        cmd.angular = -std::clamp(
+        float angle = -std::clamp(
           config.ka * angle_error, -config.max_angular, config.max_angular);
+        if (angle < 0){
+          cmd.right = 1200;
+        }else {
+          cmd.left = 1200;
+        }
       }
       break;
     case FollowMode::STOP:
       break;
     case FollowMode::SEARCH:
     case FollowMode::LOST:
-      cmd.angular = config.lost_search_angular;
+      cmd.left = 800;
+      cmd.right = 1200;
       break;
   }
 
@@ -89,7 +104,7 @@ inline MotionCommand computeCommand(
 }
 
 
-inline MotionCommand computeCommandTrack(
+inline MotionCommand computeCommand(
   const target_controller_detect::msg::TargetState &target,
   const FollowMode mode,
   const ControllerConfig &config = {}) 
@@ -117,7 +132,7 @@ inline MotionCommand computeCommandTrack(
       break;
     case FollowMode::SEARCH:
     case FollowMode::LOST:
-      cmd.angular = config.lost_search_angular;
+      cmd.angular = config.lost_left;
       break;
   }
 
