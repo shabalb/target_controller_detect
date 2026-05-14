@@ -65,10 +65,10 @@ inline MotionCommandTrack computeCommandTrack(
   MotionCommandTrack cmd;
   const float dist_error = target.distance - config.desired_distance;
   const float angle_error = target.angle;
-
+  float angle = 0.;
   switch (mode) {
     case FollowMode::ALIGN:
-      float angle = -std::clamp(
+      angle = -std::clamp(
         config.ka * angle_error, -config.max_angular, config.max_angular);
       if (angle < 0){
         cmd.right = 1200;
@@ -82,7 +82,7 @@ inline MotionCommandTrack computeCommandTrack(
           (uint16_t)(config.kd * dist_error*1000), config.min_linear_track, config.max_linear_track);
       }
       if (std::fabs(angle_error) >= config.angle_follow_deadband) {
-        float angle = -std::clamp(
+        angle = -std::clamp(
           config.ka * angle_error, -config.max_angular, config.max_angular);
         if (angle < 0){
           cmd.right = 1200;
@@ -94,6 +94,7 @@ inline MotionCommandTrack computeCommandTrack(
     case FollowMode::STOP:
       break;
     case FollowMode::SEARCH:
+      break;
     case FollowMode::LOST:
       cmd.left = 800;
       cmd.right = 1200;
