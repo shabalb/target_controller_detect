@@ -18,6 +18,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(message_filters REQUIRED)
+find_package(Boost REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -46,6 +47,7 @@ add_executable(motion_validator src/motion_validator.cpp)
 add_executable(target_fusion_node src/target_fusion_node.cpp)
 add_executable(target_controller_node src/target_controller_node.cpp)
 add_executable(target_debug_viewer_node src/target_debug_viewer_node.cpp)
+add_executable(shm_image_info src/shm_image_info.cpp)
 
 if(BUILD_COLOR_DETECTOR)
   add_executable(color_detector_node src/color_detector_node.cpp)
@@ -70,6 +72,7 @@ if(BUILD_NN_DETECTOR)
 endif()
 
 include_directories(${OpenCV_INCLUDE_DIRS})
+include_directories(${Boost_INCLUDE_DIRS})
 include_directories(include)
 
 # --- Gazebo (gz) зависимости ---
@@ -82,6 +85,7 @@ target_link_libraries(move_target
 )
 
 target_link_libraries(target_debug_viewer_node ${OpenCV_LIBS})
+target_link_libraries(shm_image_info ${Boost_LIBRARIES})
 
 if(BUILD_COLOR_DETECTOR)
   target_link_libraries(color_detector_node ${OpenCV_LIBS})
@@ -128,6 +132,9 @@ install(TARGETS target_controller_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS target_debug_viewer_node
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS shm_image_info
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/
