@@ -19,7 +19,7 @@ public:
   TargetControllerNode() : Node("target_controller_node") {
     const auto state_topic = declare_parameter<std::string>("state_topic", "/target/state");
     const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/cmd_vel");
-    //const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/autnc_move/persecuit");
+    //const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/target/persecuit");
 
 
     target_controller_detect::ControllerConfig config;

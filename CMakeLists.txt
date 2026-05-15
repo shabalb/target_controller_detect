@@ -42,7 +42,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs
 )
 
-add_executable(move_target src/move_target.cpp)
 add_executable(motion_validator src/motion_validator.cpp)
 add_executable(target_fusion_node src/target_fusion_node.cpp)
 add_executable(target_controller_node src/target_controller_node.cpp)
@@ -59,7 +58,6 @@ if(BUILD_NN_DETECTOR)
   add_executable(nn_person_detector_node src/nn_person_detector_node.cpp)
 endif()
 
-ament_target_dependencies(move_target rclcpp )
 ament_target_dependencies(motion_validator rclcpp sensor_msgs geometry_msgs)
 ament_target_dependencies(target_fusion_node rclcpp sensor_msgs std_msgs)
 ament_target_dependencies(target_controller_node rclcpp geometry_msgs std_msgs)
@@ -78,15 +76,6 @@ endif()
 include_directories(${OpenCV_INCLUDE_DIRS})
 include_directories(${Boost_INCLUDE_DIRS})
 include_directories(include)
-
-# --- Gazebo (gz) зависимости ---
-find_package(gz-transport13 REQUIRED)
-find_package(gz-msgs10 REQUIRED)
-
-target_link_libraries(move_target
-  gz-transport13::gz-transport13
-  gz-msgs10::gz-msgs10
-)
 
 target_link_libraries(target_debug_viewer_node ${OpenCV_LIBS})
 target_link_libraries(shm_image_info ${Boost_LIBRARIES})
@@ -115,10 +104,6 @@ endif()
 if(BUILD_NN_DETECTOR)
   target_link_libraries(nn_person_detector_node "${cpp_typesupport_target}")
 endif()
-
-install(TARGETS move_target 
-  DESTINATION lib/${PROJECT_NAME}
-)
 
 install(TARGETS motion_validator
   DESTINATION lib/${PROJECT_NAME})
