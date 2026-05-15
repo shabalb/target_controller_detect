@@ -42,12 +42,13 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs
 )
 
-add_executable(move_target src/move_target.cpp)
 add_executable(motion_validator src/motion_validator.cpp)
 add_executable(target_fusion_node src/target_fusion_node.cpp)
 add_executable(target_controller_node src/target_controller_node.cpp)
 add_executable(target_debug_viewer_node src/target_debug_viewer_node.cpp)
 add_executable(shm_image_info src/shm_image_info.cpp)
+add_executable(shm_color_detector_node src/shm_color_detector_node.cpp)
+add_executable(shm_depth_fusion_node src/shm_depth_fusion_node.cpp)
 
 if(BUILD_COLOR_DETECTOR)
   add_executable(color_detector_node src/color_detector_node.cpp)
@@ -57,11 +58,12 @@ if(BUILD_NN_DETECTOR)
   add_executable(nn_person_detector_node src/nn_person_detector_node.cpp)
 endif()
 
-ament_target_dependencies(move_target rclcpp )
 ament_target_dependencies(motion_validator rclcpp sensor_msgs geometry_msgs)
 ament_target_dependencies(target_fusion_node rclcpp sensor_msgs std_msgs)
 ament_target_dependencies(target_controller_node rclcpp geometry_msgs std_msgs)
 ament_target_dependencies(target_debug_viewer_node rclcpp sensor_msgs cv_bridge std_msgs)
+ament_target_dependencies(shm_color_detector_node rclcpp std_msgs)
+ament_target_dependencies(shm_depth_fusion_node rclcpp std_msgs)
 
 if(BUILD_COLOR_DETECTOR)
   ament_target_dependencies(color_detector_node rclcpp sensor_msgs cv_bridge std_msgs)
@@ -75,17 +77,10 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 include_directories(${Boost_INCLUDE_DIRS})
 include_directories(include)
 
-# --- Gazebo (gz) зависимости ---
-find_package(gz-transport13 REQUIRED)
-find_package(gz-msgs10 REQUIRED)
-
-target_link_libraries(move_target
-  gz-transport13::gz-transport13
-  gz-msgs10::gz-msgs10
-)
-
 target_link_libraries(target_debug_viewer_node ${OpenCV_LIBS})
 target_link_libraries(shm_image_info ${Boost_LIBRARIES})
+target_link_libraries(shm_color_detector_node ${OpenCV_LIBS} ${Boost_LIBRARIES})
+target_link_libraries(shm_depth_fusion_node ${OpenCV_LIBS} ${Boost_LIBRARIES})
 
 if(BUILD_COLOR_DETECTOR)
   target_link_libraries(color_detector_node ${OpenCV_LIBS})
@@ -99,6 +94,8 @@ rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_type
 target_link_libraries(target_fusion_node "${cpp_typesupport_target}")
 target_link_libraries(target_controller_node "${cpp_typesupport_target}")
 target_link_libraries(target_debug_viewer_node "${cpp_typesupport_target}")
+target_link_libraries(shm_color_detector_node "${cpp_typesupport_target}")
+target_link_libraries(shm_depth_fusion_node "${cpp_typesupport_target}")
 
 if(BUILD_COLOR_DETECTOR)
   target_link_libraries(color_detector_node "${cpp_typesupport_target}")
@@ -107,10 +104,6 @@ endif()
 if(BUILD_NN_DETECTOR)
   target_link_libraries(nn_person_detector_node "${cpp_typesupport_target}")
 endif()
-
-install(TARGETS move_target 
-  DESTINATION lib/${PROJECT_NAME}
-)
 
 install(TARGETS motion_validator
   DESTINATION lib/${PROJECT_NAME})
@@ -135,6 +128,9 @@ install(TARGETS target_debug_viewer_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS shm_image_info
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS shm_color_detector_node shm_depth_fusion_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/
