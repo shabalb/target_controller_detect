@@ -26,7 +26,7 @@ def generate_launch_description():
             DeclareLaunchArgument("image_width", default_value="960"),
             DeclareLaunchArgument("image_height", default_value="540"),
             DeclareLaunchArgument("camera_fov", default_value="1.255"),
-            DeclareLaunchArgument("debug", default_value="true"),
+            DeclareLaunchArgument("debug", default_value="false"),
             DeclareLaunchArgument("use_nn_detector", default_value="false"),
             DeclareLaunchArgument(
                 "detector_model_path",
