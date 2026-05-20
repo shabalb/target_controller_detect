@@ -35,6 +35,7 @@ endif()
 set(msg_files
   "msg/Detection2D.msg"
   "msg/TargetState.msg"
+  "msg/CommandTwist.msg"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}

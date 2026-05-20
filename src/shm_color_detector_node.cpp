@@ -6,6 +6,7 @@
 #include <opencv2/imgproc.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "target_controller_detect/detector_utils.hpp"
 #include "target_controller_detect/msg/detection2_d.hpp"
@@ -18,11 +19,18 @@ public:
   ShmColorDetectorNode() : Node("shm_color_detector_node") {
     shm_name_ = declare_parameter<std::string>("shm_name", "oak_rgb");
     detection_topic_ = declare_parameter<std::string>("detection_topic", "/target/detection2d");
+    oper_topic_ = declare_parameter<std::string>("oper_topic", "/target/follow");
     process_fps_ = declare_parameter<double>("process_fps", 15.0);
     show_windows_ = declare_parameter<bool>("show_windows", false);
 
     detection_pub_ = create_publisher<target_controller_detect::msg::Detection2D>(
       detection_topic_, 10);
+
+    rclcpp::QoS qos(rclcpp::KeepLast(20));
+    qos.best_effort();
+
+    oper_sub_ = create_subscription<std_msgs::msg::String>(
+      oper_topic_, qos, std::bind(&ShmColorDetectorNode::onOper, this, std::placeholders::_1));
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, process_fps_));
     timer_ = create_wall_timer(
@@ -61,7 +69,18 @@ private:
     }
   }
 
+  void onOper(const std_msgs::msg::String::ConstPtr& msg){
+    if(std::strcmp(msg->data.c_str(),"switch control mode to follow")==0){
+      is_oper_follow_mode = true;
+    }else{
+      is_oper_follow_mode = false;
+    }
+  }
+
   void onTimer() {
+    if (!is_oper_follow_mode){
+      return;
+    }
     if (!ensureReader()) {
       return;
     }
@@ -126,13 +145,16 @@ private:
     }
   }
 
+  bool is_oper_follow_mode{false};
   std::string shm_name_;
   std::string detection_topic_;
+  std::string oper_topic_;
   double process_fps_{15.0};
   bool show_windows_{false};
   std::uint64_t last_seq_{0};
   std::unique_ptr<target_controller_detect::ShmImageRingReader> reader_;
   rclcpp::Publisher<target_controller_detect::msg::Detection2D>::SharedPtr detection_pub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr oper_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

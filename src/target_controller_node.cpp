@@ -6,6 +6,7 @@
 
 #include "target_controller_detect/controller_utils.hpp"
 #include "target_controller_detect/msg/target_state.hpp"
+#include "target_controller_detect/msg/command_twist.hpp"
 
 
 class MotionCommandTrack {
@@ -19,7 +20,7 @@ public:
   TargetControllerNode() : Node("target_controller_node") {
     const auto state_topic = declare_parameter<std::string>("state_topic", "/target/state");
     const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/cmd_vel");
-    //const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/target/persecuit");
+    const auto cmd_topic_track = declare_parameter<std::string>("cmd_topic_track", "/target/persecuit");
 
 
     target_controller_detect::ControllerConfig config;
@@ -41,7 +42,7 @@ public:
     state_sub_ = create_subscription<target_controller_detect::msg::TargetState>(
       state_topic, 10, std::bind(&TargetControllerNode::onState, this, std::placeholders::_1));
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>(cmd_topic, 10);
-    //cmd_pub_ = create_publisher<MotionCommandTrack>(cmd_topic, 10);
+    cmd_pub_track = create_publisher<target_controller_detect::msg::CommandTwist>(cmd_topic_track, 10);
 
     RCLCPP_INFO(get_logger(), "State topic: %s", state_topic.c_str());
     RCLCPP_INFO(get_logger(), "Cmd topic: %s", cmd_topic.c_str());
@@ -51,7 +52,7 @@ private:
   void onState(const target_controller_detect::msg::TargetState::SharedPtr msg) {
     const auto mode = target_controller_detect::decideMode(*msg, config_);
     const auto cmd = target_controller_detect::computeCommand(*msg, mode, config_);
-    //const auto cmd = target_controller_detect::computeCommandTrack(*msg, mode, config_);
+    const auto cmd_track = target_controller_detect::computeCommandTrack(*msg, mode, config_);
 
     geometry_msgs::msg::Twist twist;
     twist.linear.x = cmd.linear;
@@ -59,11 +60,13 @@ private:
 
     cmd_pub_->publish(twist);
 
-    //MoveComand moveCmd;
-    //moveCmd.left = cmd.left;
-    //moveCmd.right = cmd.right;
+    target_controller_detect::msg::CommandTwist moveCmd;
+    moveCmd.left = cmd_track.left;
+    moveCmd.right = cmd_track.right;
+    moveCmd.light = 0;
+    moveCmd.forced = false;
 
-    //cmd_pub_->publish(moveCmd);
+    cmd_pub_track->publish(moveCmd);
 
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 500, "Control valid=%d dist=%.3f angle=%.3f cmd=(%.3f, %.3f)",
@@ -73,7 +76,7 @@ private:
   target_controller_detect::ControllerConfig config_;
   rclcpp::Subscription<target_controller_detect::msg::TargetState>::SharedPtr state_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
-  //rclcpp::Publisher<MotionCommandTrack>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<target_controller_detect::msg::CommandTwist>::SharedPtr cmd_pub_track;
 };
 
 int main(int argc, char **argv) {
