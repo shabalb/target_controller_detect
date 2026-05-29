@@ -98,6 +98,7 @@ def generate_launch_description():
                     {
                         "state_topic": "/target/state",
                         "cmd_topic": "/cmd_vel",
+                        "cmd_topic_track": "/target/persecuit",
                     }
                 ],
             ),

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 
 #include "target_controller_detect/msg/target_state.hpp"
@@ -29,10 +30,9 @@ struct MotionCommand {
   float angular = 0.0f;
 };
 
-class MotionCommandTrack {
-  public:
-  uint16_t right = 0;// от 0 до 2000
-  uint16_t left = 0;// от 0 до 2000
+struct MotionCommandTrack {
+  uint16_t left = 0;   // от 0 до 2000
+  uint16_t right = 0;  // от 0 до 2000
 };
 
 inline FollowMode decideMode(
@@ -133,7 +133,7 @@ inline MotionCommand computeCommand(
       break;
     case FollowMode::SEARCH:
     case FollowMode::LOST:
-      cmd.angular = config.lost_left;
+      cmd.angular = config.lost_search_angular;
       break;
   }
 
