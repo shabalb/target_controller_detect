@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -11,9 +12,11 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/header.hpp>
 
 #include "target_controller_detect/detector_utils.hpp"
 #include "target_controller_detect/msg/detection2_d.hpp"
+#include "target_controller_detect/shm_image_ring.hpp"
 
 namespace {
 
@@ -116,11 +119,62 @@ int parseTarget(const std::string &value) {
   return cv::dnn::DNN_TARGET_CPU;
 }
 
+cv::Mat shmViewToBgr(const target_controller_detect::ShmImageView &view) {
+  const int width = static_cast<int>(view.width);
+  const int height = static_cast<int>(view.height);
+  if (width <= 0 || height <= 0) {
+    return {};
+  }
+
+  if (view.encoding == "bgr8") {
+    if (view.step < view.width * 3U) {
+      throw std::runtime_error("bgr8 SHM step is too small");
+    }
+    cv::Mat src(height, width, CV_8UC3, const_cast<std::uint8_t *>(view.data), view.step);
+    return src.clone();
+  }
+
+  if (view.encoding == "rgb8") {
+    if (view.step < view.width * 3U) {
+      throw std::runtime_error("rgb8 SHM step is too small");
+    }
+    cv::Mat src(height, width, CV_8UC3, const_cast<std::uint8_t *>(view.data), view.step);
+    cv::Mat bgr;
+    cv::cvtColor(src, bgr, cv::COLOR_RGB2BGR);
+    return bgr;
+  }
+
+  if (view.encoding == "mono8") {
+    if (view.step < view.width) {
+      throw std::runtime_error("mono8 SHM step is too small");
+    }
+    cv::Mat src(height, width, CV_8UC1, const_cast<std::uint8_t *>(view.data), view.step);
+    cv::Mat bgr;
+    cv::cvtColor(src, bgr, cv::COLOR_GRAY2BGR);
+    return bgr;
+  }
+
+  if (view.encoding == "nv12") {
+    const auto expected = static_cast<std::uint32_t>(view.width * view.height * 3U / 2U);
+    if (view.data_size < expected) {
+      throw std::runtime_error("nv12 SHM data_size is too small");
+    }
+    cv::Mat nv12(height * 3 / 2, width, CV_8UC1, const_cast<std::uint8_t *>(view.data));
+    cv::Mat bgr;
+    cv::cvtColor(nv12, bgr, cv::COLOR_YUV2BGR_NV12);
+    return bgr;
+  }
+
+  throw std::runtime_error("Unsupported RGB SHM encoding: " + view.encoding);
+}
+
 }  // namespace
 
 class NnPersonDetectorNode : public rclcpp::Node {
 public:
   NnPersonDetectorNode() : Node("nn_person_detector_node") {
+    input_source_ = declare_parameter<std::string>("input_source", "ros");
+    shm_name_ = declare_parameter<std::string>("shm_name", "oak_rgb");
     const auto camera_topic = declare_parameter<std::string>("camera_topic", "/camera/image");
     detection_topic_ = declare_parameter<std::string>("detection_topic", "/target/detection2d");
     model_path_ = declare_parameter<std::string>("model_path", "");
@@ -129,6 +183,7 @@ public:
     input_height_ = declare_parameter<int>("input_height", 640);
     conf_threshold_ = declare_parameter<double>("conf_threshold", 0.40);
     nms_threshold_ = declare_parameter<double>("nms_threshold", 0.45);
+    process_fps_ = declare_parameter<double>("process_fps", 15.0);
     grid_cols_ = declare_parameter<int>("grid_cols", 30);
     grid_rows_ = declare_parameter<int>("grid_rows", 30);
     show_windows_ = declare_parameter<bool>("show_windows", false);
@@ -142,14 +197,23 @@ public:
     qos.best_effort();
 
     detection_pub_ = create_publisher<target_controller_detect::msg::Detection2D>(detection_topic_, 10);
-    image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      camera_topic, qos, std::bind(&NnPersonDetectorNode::onImage, this, std::placeholders::_1));
+    if (input_source_ == "shm") {
+      const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, process_fps_));
+      timer_ = create_wall_timer(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+        std::bind(&NnPersonDetectorNode::onTimer, this));
+    } else {
+      image_sub_ = create_subscription<sensor_msgs::msg::Image>(
+        camera_topic, qos, std::bind(&NnPersonDetectorNode::onImage, this, std::placeholders::_1));
+    }
 
     if (show_windows_) {
       cv::namedWindow("nn_detector_camera", cv::WINDOW_NORMAL);
     }
 
+    RCLCPP_INFO(get_logger(), "Input source: %s", input_source_.c_str());
     RCLCPP_INFO(get_logger(), "Camera topic: %s", camera_topic.c_str());
+    RCLCPP_INFO(get_logger(), "RGB SHM: %s", shm_name_.c_str());
     RCLCPP_INFO(get_logger(), "Detection topic: %s", detection_topic_.c_str());
     RCLCPP_INFO(get_logger(), "Model path: %s", model_path_.c_str());
   }
@@ -161,6 +225,23 @@ public:
   }
 
 private:
+  bool ensureReader() {
+    if (reader_) {
+      return true;
+    }
+
+    try {
+      reader_ = std::make_unique<target_controller_detect::ShmImageRingReader>(shm_name_);
+      RCLCPP_INFO(get_logger(), "Opened RGB shared memory: %s", shm_name_.c_str());
+      return true;
+    } catch (const std::exception &exc) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000, "Waiting for RGB SHM '%s': %s",
+        shm_name_.c_str(), exc.what());
+      return false;
+    }
+  }
+
   void loadModel(const std::string &backend, const std::string &target) {
     if (model_path_.empty()) {
       RCLCPP_ERROR(get_logger(), "Parameter 'model_path' is empty. Detector will publish empty detections.");
@@ -179,6 +260,72 @@ private:
     } catch (const cv::Exception &e) {
       RCLCPP_ERROR(get_logger(), "Failed to load model '%s': %s", model_path_.c_str(), e.what());
       model_ready_ = false;
+    }
+  }
+
+  void publishDetection(
+    const cv::Mat &bgr,
+    const std_msgs::msg::Header &header) {
+    auto detection = infer(bgr, header);
+    detection_pub_->publish(detection);
+
+    if (show_windows_) {
+      cv::Mat debug = bgr.clone();
+      if (detection.found) {
+        cv::rectangle(
+          debug, cv::Rect(detection.x, detection.y, detection.width, detection.height),
+          cv::Scalar(0, 255, 0), 2);
+        cv::putText(
+          debug, "person " + std::to_string(detection.score),
+          cv::Point(detection.x, std::max(0, detection.y - 8)), cv::FONT_HERSHEY_SIMPLEX, 0.6,
+          cv::Scalar(0, 255, 0), 2);
+      }
+
+      cv::putText(
+        debug, "nn detector", cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX, 0.7,
+        cv::Scalar(0, 255, 255), 2);
+      cv::imshow("nn_detector_camera", debug);
+      cv::waitKey(1);
+    }
+
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000, "NN detection found=%d center=(%.1f, %.1f) score=%.3f",
+      detection.found, detection.center_x, detection.center_y, detection.score);
+  }
+
+  void onTimer() {
+    if (!ensureReader()) {
+      return;
+    }
+
+    target_controller_detect::ShmImageView view;
+    if (!reader_->latest(view) || view.seq == last_seq_) {
+      return;
+    }
+    last_seq_ = view.seq;
+
+    std_msgs::msg::Header header;
+    header.stamp = now();
+    header.frame_id = "oak_rgb_camera_optical_frame";
+
+    target_controller_detect::msg::Detection2D empty_detection;
+    empty_detection.header = header;
+    empty_detection.cell_x = -1;
+    empty_detection.cell_y = -1;
+
+    try {
+      cv::Mat bgr = shmViewToBgr(view);
+      if (bgr.empty()) {
+        detection_pub_->publish(empty_detection);
+        return;
+      }
+      publishDetection(bgr, header);
+    } catch (const cv::Exception &exc) {
+      RCLCPP_ERROR(get_logger(), "OpenCV exception: %s", exc.what());
+      detection_pub_->publish(empty_detection);
+    } catch (const std::exception &exc) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "SHM image error: %s", exc.what());
+      detection_pub_->publish(empty_detection);
     }
   }
 
@@ -325,30 +472,7 @@ private:
       }
 
       cv::Mat bgr = target_controller_detect::ensureBgrImage(cv_ptr->image, msg->encoding);
-      auto detection = infer(bgr, msg->header);
-      detection_pub_->publish(detection);
-
-      if (show_windows_) {
-        if (detection.found) {
-          cv::rectangle(
-            bgr, cv::Rect(detection.x, detection.y, detection.width, detection.height),
-            cv::Scalar(0, 255, 0), 2);
-          cv::putText(
-            bgr, "person " + std::to_string(detection.score),
-            cv::Point(detection.x, std::max(0, detection.y - 8)), cv::FONT_HERSHEY_SIMPLEX, 0.6,
-            cv::Scalar(0, 255, 0), 2);
-        }
-
-        cv::putText(
-          bgr, "nn detector", cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX, 0.7,
-          cv::Scalar(0, 255, 255), 2);
-        cv::imshow("nn_detector_camera", bgr);
-        cv::waitKey(1);
-      }
-
-      RCLCPP_INFO_THROTTLE(
-        get_logger(), *get_clock(), 1000, "NN detection found=%d center=(%.1f, %.1f) score=%.3f",
-        detection.found, detection.center_x, detection.center_y, detection.score);
+      publishDetection(bgr, msg->header);
     } catch (const cv_bridge::Exception &e) {
       RCLCPP_ERROR(get_logger(), "cv_bridge exception: %s", e.what());
       detection_pub_->publish(empty_detection);
@@ -358,6 +482,8 @@ private:
     }
   }
 
+  std::string input_source_;
+  std::string shm_name_;
   std::string detection_topic_;
   std::string model_path_;
 
@@ -365,16 +491,20 @@ private:
   int input_height_{640};
   int grid_cols_{30};
   int grid_rows_{30};
+  double process_fps_{15.0};
   double conf_threshold_{0.40};
   double nms_threshold_{0.45};
   bool show_windows_{false};
+  std::uint64_t last_seq_{0};
 
   bool model_ready_{false};
   cv::dnn::Net net_;
   std::vector<std::string> output_names_;
+  std::unique_ptr<target_controller_detect::ShmImageRingReader> reader_;
 
   rclcpp::Publisher<target_controller_detect::msg::Detection2D>::SharedPtr detection_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+  rclcpp::TimerBase::SharedPtr timer_;
 };
 
 int main(int argc, char **argv) {

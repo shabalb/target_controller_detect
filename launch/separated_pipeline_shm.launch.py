@@ -60,12 +60,15 @@ def generate_launch_description():
                 parameters=[
                     {
                         "camera_topic": "/unused_ros_image_topic",
+                        "input_source": "shm",
+                        "shm_name": rgb_shm_name,
                         "detection_topic": "/target/detection2d",
                         "model_path": detector_model_path,
                         "input_width": 640,
                         "input_height": 640,
                         "conf_threshold": 0.40,
                         "nms_threshold": 0.45,
+                        "process_fps": 15.0,
                         "dnn_backend": detector_backend,
                         "dnn_target": detector_target,
                         "show_windows": debug,

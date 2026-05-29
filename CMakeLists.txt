@@ -88,7 +88,7 @@ if(BUILD_COLOR_DETECTOR)
 endif()
 
 if(BUILD_NN_DETECTOR)
-  target_link_libraries(nn_person_detector_node ${OpenCV_LIBS})
+  target_link_libraries(nn_person_detector_node ${OpenCV_LIBS} ${Boost_LIBRARIES})
 endif()
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
