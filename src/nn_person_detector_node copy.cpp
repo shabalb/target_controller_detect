@@ -1,13 +1,12 @@
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <onnxruntime_cxx_api.h>
 #include <cv_bridge/cv_bridge.hpp>
+#include <opencv2/dnn.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -54,69 +53,19 @@ LetterboxResult makeLetterbox(const cv::Mat &bgr, int dst_w, int dst_h) {
   return result;
 }
 
-float iou(const cv::Rect &a, const cv::Rect &b) {
-  const int area_a = a.area();
-  const int area_b = b.area();
-  if (area_a <= 0 || area_b <= 0) {
-    return 0.0f;
-  }
-
-  const int x1 = std::max(a.x, b.x);
-  const int y1 = std::max(a.y, b.y);
-  const int x2 = std::min(a.x + a.width, b.x + b.width);
-  const int y2 = std::min(a.y + a.height, b.y + b.height);
-  const int w = std::max(0, x2 - x1);
-  const int h = std::max(0, y2 - y1);
-  const float inter = static_cast<float>(w * h);
-  return inter / static_cast<float>(area_a + area_b - inter);
-}
-
-std::vector<int> nmsBoxes(
-  const std::vector<cv::Rect> &boxes,
-  const std::vector<float> &scores,
-  float score_threshold,
-  float nms_threshold) {
-  std::vector<int> order;
-  order.reserve(scores.size());
-  for (size_t i = 0; i < scores.size(); ++i) {
-    if (scores[i] >= score_threshold) {
-      order.push_back(static_cast<int>(i));
-    }
-  }
-
-  std::sort(order.begin(), order.end(), [&scores](int lhs, int rhs) {
-    return scores[lhs] > scores[rhs];
-  });
-
-  std::vector<int> keep;
-  for (const int idx : order) {
-    bool suppressed = false;
-    for (const int kept_idx : keep) {
-      if (iou(boxes[idx], boxes[kept_idx]) > nms_threshold) {
-        suppressed = true;
-        break;
-      }
-    }
-    if (!suppressed) {
-      keep.push_back(idx);
-    }
-  }
-  return keep;
-}
-
-cv::Mat normalizeDetections(const float *data, const std::vector<int64_t> &shape) {
-  if (data == nullptr || shape.empty()) {
+cv::Mat normalizeDetections(const cv::Mat &output) {
+  if (output.empty()) {
     return {};
   }
 
-  if (shape.size() == 3) {
-    const int d1 = static_cast<int>(shape[1]);
-    const int d2 = static_cast<int>(shape[2]);
+  if (output.dims == 3) {
+    const int d1 = output.size[1];
+    const int d2 = output.size[2];
     if (d1 <= 0 || d2 <= 0) {
       return {};
     }
 
-    cv::Mat tmp(d1, d2, CV_32F, const_cast<float *>(data));
+    cv::Mat tmp(d1, d2, CV_32F, const_cast<float *>(output.ptr<float>()));
     cv::Mat normalized;
     // Typical YOLOv8 ONNX output is [1, 84, 8400], transpose to [8400, 84].
     if (d1 < d2 && d1 <= 256) {
@@ -127,22 +76,47 @@ cv::Mat normalizeDetections(const float *data, const std::vector<int64_t> &shape
     return tmp.clone();
   }
 
-  if (shape.size() == 2) {
-    const int rows = static_cast<int>(shape[0]);
-    const int cols = static_cast<int>(shape[1]);
-    if (rows <= 0 || cols <= 0) {
-      return {};
+  if (output.dims == 2) {
+    cv::Mat normalized = output;
+    if (normalized.type() != CV_32F) {
+      normalized.convertTo(normalized, CV_32F);
     }
-    cv::Mat tmp(rows, cols, CV_32F, const_cast<float *>(data));
-    if (rows < cols && rows <= 256) {
-      cv::Mat normalized;
-      cv::transpose(tmp, normalized);
-      return normalized;
+    if (normalized.rows < normalized.cols && normalized.rows <= 256) {
+      cv::transpose(normalized, normalized);
     }
-    return tmp.clone();
+    return normalized;
   }
 
   return {};
+}
+
+int parseBackend(const std::string &value) {
+  if (value == "opencv") {
+    return cv::dnn::DNN_BACKEND_OPENCV;
+  }
+  if (value == "cuda") {
+    return cv::dnn::DNN_BACKEND_CUDA;
+  }
+  return cv::dnn::DNN_BACKEND_DEFAULT;
+}
+
+int parseTarget(const std::string &value) {
+  if (value == "cpu") {
+    return cv::dnn::DNN_TARGET_CPU;
+  }
+  if (value == "opencl") {
+    return cv::dnn::DNN_TARGET_OPENCL;
+  }
+  if (value == "opencl_fp16") {
+    return cv::dnn::DNN_TARGET_OPENCL_FP16;
+  }
+  if (value == "cuda") {
+    return cv::dnn::DNN_TARGET_CUDA;
+  }
+  if (value == "cuda_fp16") {
+    return cv::dnn::DNN_TARGET_CUDA_FP16;
+  }
+  return cv::dnn::DNN_TARGET_CPU;
 }
 
 cv::Mat shmViewToBgr(const target_controller_detect::ShmImageView &view) {
@@ -213,11 +187,11 @@ public:
     grid_cols_ = declare_parameter<int>("grid_cols", 30);
     grid_rows_ = declare_parameter<int>("grid_rows", 30);
     show_windows_ = declare_parameter<bool>("show_windows", false);
-    self_test_once_ = declare_parameter<bool>("self_test_once", false);
-    declare_parameter<std::string>("dnn_backend", "onnxruntime");
-    declare_parameter<std::string>("dnn_target", "cpu");
 
-    loadModel();
+    const auto backend = declare_parameter<std::string>("dnn_backend", "opencv");
+    const auto target = declare_parameter<std::string>("dnn_target", "cpu");
+
+    loadModel(backend, target);
 
     rclcpp::QoS qos(rclcpp::KeepLast(20));
     qos.best_effort();
@@ -242,10 +216,6 @@ public:
     RCLCPP_INFO(get_logger(), "RGB SHM: %s", shm_name_.c_str());
     RCLCPP_INFO(get_logger(), "Detection topic: %s", detection_topic_.c_str());
     RCLCPP_INFO(get_logger(), "Model path: %s", model_path_.c_str());
-
-    if (self_test_once_) {
-      runSelfTest();
-    }
   }
 
   ~NnPersonDetectorNode() override {
@@ -272,35 +242,23 @@ private:
     }
   }
 
-  void loadModel() {
+  void loadModel(const std::string &backend, const std::string &target) {
     if (model_path_.empty()) {
       RCLCPP_ERROR(get_logger(), "Parameter 'model_path' is empty. Detector will publish empty detections.");
       return;
     }
 
     try {
-      Ort::SessionOptions session_options;
-      session_options.SetIntraOpNumThreads(1);
-      session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
-
-      session_ = std::make_unique<Ort::Session>(ort_env_, model_path_.c_str(), session_options);
-
-      Ort::AllocatorWithDefaultOptions allocator;
-      input_name_allocs_.push_back(session_->GetInputNameAllocated(0, allocator));
-      input_names_.push_back(input_name_allocs_.back().get());
-
-      const size_t output_count = session_->GetOutputCount();
-      output_name_allocs_.reserve(output_count);
-      output_names_.reserve(output_count);
-      for (size_t i = 0; i < output_count; ++i) {
-        output_name_allocs_.push_back(session_->GetOutputNameAllocated(i, allocator));
-        output_names_.push_back(output_name_allocs_.back().get());
-      }
-
+      net_ = cv::dnn::readNet(model_path_);
+      net_.setPreferableBackend(parseBackend(backend));
+      net_.setPreferableTarget(parseTarget(target));
+      output_names_ = net_.getUnconnectedOutLayersNames();
       model_ready_ = true;
-      RCLCPP_INFO(get_logger(), "Loaded ONNX Runtime model: %s", model_path_.c_str());
-    } catch (const Ort::Exception &e) {
-      RCLCPP_ERROR(get_logger(), "Failed to load ONNX model '%s': %s", model_path_.c_str(), e.what());
+      RCLCPP_INFO(
+        get_logger(), "Loaded model (%s), backend=%s, target=%s", model_path_.c_str(),
+        backend.c_str(), target.c_str());
+    } catch (const cv::Exception &e) {
+      RCLCPP_ERROR(get_logger(), "Failed to load model '%s': %s", model_path_.c_str(), e.what());
       model_ready_ = false;
     }
   }
@@ -385,60 +343,20 @@ private:
 
     auto lb = makeLetterbox(bgr, input_width_, input_height_);
 
-    input_tensor_values_.resize(static_cast<size_t>(3 * input_width_ * input_height_));
-    for (int y = 0; y < input_height_; ++y) {
-      const auto *row = lb.image.ptr<cv::Vec3b>(y);
-      for (int x = 0; x < input_width_; ++x) {
-        const auto &bgr_px = row[x];
-        const size_t offset = static_cast<size_t>(y * input_width_ + x);
-        input_tensor_values_[offset] = static_cast<float>(bgr_px[2]) / 255.0f;
-        input_tensor_values_[static_cast<size_t>(input_width_ * input_height_) + offset] =
-          static_cast<float>(bgr_px[1]) / 255.0f;
-        input_tensor_values_[static_cast<size_t>(2 * input_width_ * input_height_) + offset] =
-          static_cast<float>(bgr_px[0]) / 255.0f;
-      }
-    }
+    cv::Mat blob;
+    cv::dnn::blobFromImage(
+      lb.image, blob, 1.0 / 255.0, cv::Size(input_width_, input_height_), cv::Scalar(), true, false,
+      CV_32F);
 
-    const std::array<int64_t, 4> input_shape{
-      1, 3, static_cast<int64_t>(input_height_), static_cast<int64_t>(input_width_)};
+    net_.setInput(blob);
 
-    auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    auto input_tensor = Ort::Value::CreateTensor<float>(
-      memory_info, input_tensor_values_.data(), input_tensor_values_.size(),
-      input_shape.data(), input_shape.size());
-
-    RCLCPP_INFO(get_logger(), "infer ONNX Runtime run in");
-    std::vector<Ort::Value> output_tensors;
-    try {
-      output_tensors = session_->Run(
-        Ort::RunOptions{nullptr},
-        input_names_.data(),
-        &input_tensor,
-        1,
-        output_names_.data(),
-        output_names_.size());
-      forward_error_count_ = 0;
-    } catch (const Ort::Exception &exc) {
-      ++forward_error_count_;
-      RCLCPP_ERROR(
-        get_logger(), "ONNX Runtime inference failed (%d/3): %s", forward_error_count_, exc.what());
-      if (forward_error_count_ >= 3) {
-        model_ready_ = false;
-        RCLCPP_ERROR(
-          get_logger(),
-          "Disabling NN model after repeated ONNX Runtime inference failures.");
-      }
-      return detection;
-    }
-    RCLCPP_INFO(get_logger(), "infer ONNX Runtime run out");
-    if (output_tensors.empty() || !output_tensors.front().IsTensor()) {
+    std::vector<cv::Mat> outputs;
+    net_.forward(outputs, output_names_);
+    if (outputs.empty()) {
       return detection;
     }
 
-    const auto output_info = output_tensors.front().GetTensorTypeAndShapeInfo();
-    const auto output_shape = output_info.GetShape();
-    const float *output_data = output_tensors.front().GetTensorData<float>();
-    const cv::Mat det = normalizeDetections(output_data, output_shape);
+    const cv::Mat det = normalizeDetections(outputs.front());
     if (det.empty() || det.cols < 5) {
       return detection;
     }
@@ -495,8 +413,9 @@ private:
       return detection;
     }
 
-    std::vector<int> keep = nmsBoxes(
-      boxes, scores, static_cast<float>(conf_threshold_), static_cast<float>(nms_threshold_));
+    std::vector<int> keep;
+    cv::dnn::NMSBoxes(
+      boxes, scores, static_cast<float>(conf_threshold_), static_cast<float>(nms_threshold_), keep);
     if (keep.empty()) {
       return detection;
     }
@@ -563,20 +482,6 @@ private:
     }
   }
 
-  void runSelfTest() {
-    std_msgs::msg::Header header;
-    header.stamp = now();
-    header.frame_id = "self_test_frame";
-
-    cv::Mat test_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
-    RCLCPP_INFO(get_logger(), "Running ONNX Runtime self-test without camera");
-    auto detection = infer(test_image, header);
-    RCLCPP_INFO(
-      get_logger(),
-      "ONNX Runtime self-test finished: model_ready=%d found=%d score=%.3f",
-      model_ready_, detection.found, detection.score);
-  }
-
   std::string input_source_;
   std::string shm_name_;
   std::string detection_topic_;
@@ -590,18 +495,11 @@ private:
   double conf_threshold_{0.40};
   double nms_threshold_{0.45};
   bool show_windows_{false};
-  bool self_test_once_{false};
   std::uint64_t last_seq_{0};
 
   bool model_ready_{false};
-  int forward_error_count_{0};
-  Ort::Env ort_env_{ORT_LOGGING_LEVEL_WARNING, "nn_person_detector_node"};
-  std::unique_ptr<Ort::Session> session_;
-  std::vector<float> input_tensor_values_;
-  std::vector<Ort::AllocatedStringPtr> input_name_allocs_;
-  std::vector<Ort::AllocatedStringPtr> output_name_allocs_;
-  std::vector<const char *> input_names_;
-  std::vector<const char *> output_names_;
+  cv::dnn::Net net_;
+  std::vector<std::string> output_names_;
   std::unique_ptr<target_controller_detect::ShmImageRingReader> reader_;
 
   rclcpp::Publisher<target_controller_detect::msg::Detection2D>::SharedPtr detection_pub_;

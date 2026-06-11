@@ -1,0 +1,36 @@
+ros2 launch target_controller_detect separated_pipeline_shm.launch.py
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2026-04-11-00-33-57-756045-ubuntu-2113
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [nn_person_detector_node-1]: process started with pid [2117]
+[INFO] [shm_depth_fusion_node-2]: process started with pid [2118]
+[INFO] [target_controller_node-3]: process started with pid [2119]
+[target_controller_node-3] [INFO] [1775867638.270710988] [target_controller_node]: State topic: /target/state
+[target_controller_node-3] [INFO] [1775867638.270883654] [target_controller_node]: Cmd topic: /cmd_vel
+[target_controller_node-3] [INFO] [1775867638.270897071] [target_controller_node]: Track cmd topic: /target/persecuit
+[shm_depth_fusion_node-2] [INFO] [1775867638.277967655] [shm_depth_fusion_node]: Depth SHM: oak_depth
+[shm_depth_fusion_node-2] [INFO] [1775867638.278144405] [shm_depth_fusion_node]: Detection topic: /target/detection2d
+[shm_depth_fusion_node-2] [INFO] [1775867638.278163072] [shm_depth_fusion_node]: State topic: /target/state
+[nn_person_detector_node-1] [INFO] [1775867638.538950723] [nn_person_detector_node]: Loaded model (/home/ubuntu/robot_ws/install/target_controller_detect/share/target_controller_detect/models/yolov8n.onnx), backend=opencv, target=cpu
+[nn_person_detector_node-1] [INFO] [1775867638.543934723] [nn_person_detector_node]: Input source: shm
+[nn_person_detector_node-1] [INFO] [1775867638.544026015] [nn_person_detector_node]: Camera topic: /unused_ros_image_topic
+[nn_person_detector_node-1] [INFO] [1775867638.544041182] [nn_person_detector_node]: RGB SHM: oak_rgb
+[nn_person_detector_node-1] [INFO] [1775867638.544051973] [nn_person_detector_node]: Detection topic: /target/detection2d
+[nn_person_detector_node-1] [INFO] [1775867638.544067723] [nn_person_detector_node]: Model path: /home/ubuntu/robot_ws/install/target_controller_detect/share/target_controller_detect/models/yolov8n.onnx
+[nn_person_detector_node-1] [INFO] [1775867639.044286607] [nn_person_detector_node]: Opened RGB shared memory: oak_rgb
+[nn_person_detector_node-1] [INFO] [1775867639.045759524] [nn_person_detector_node]: infer in
+[nn_person_detector_node-1] [INFO] [1775867639.068490276] [nn_person_detector_node]: infer net input
+[nn_person_detector_node-1] [INFO] [1775867639.072826193] [nn_person_detector_node]: infer net out
+[nn_person_detector_node-1] [INFO] [1775867639.073009652] [nn_person_detector_node]: infer net forvard in
+[nn_person_detector_node-1] [ERROR] [1775867639.543541824] [nn_person_detector_node]: OpenCV exception: OpenCV(4.6.0) ./modules/dnn/include/opencv2/dnn/shape_utils.hpp:170: error: (-215:Assertion failed) start <= (int)shape.size() && end <= (int)shape.size() && start <= end in function 'total'
+[nn_person_detector_node-1] 
+[nn_person_detector_node-1] [INFO] [1775867639.545806907] [nn_person_detector_node]: infer in
+[nn_person_detector_node-1] [INFO] [1775867639.559549367] [nn_person_detector_node]: infer net input
+[nn_person_detector_node-1] [INFO] [1775867639.561096659] [nn_person_detector_node]: infer net out
+[nn_person_detector_node-1] [INFO] [1775867639.561137784] [nn_person_detector_node]: infer net forvard in
+[nn_person_detector_node-1] [ERROR] [1775867639.984760327] [nn_person_detector_node]: OpenCV exception: OpenCV(4.6.0) ./modules/dnn/include/opencv2/dnn/shape_utils.hpp:170: error: (-215:Assertion failed) start <= (int)shape.size() && end <= (int)shape.size() && start <= end in function 'total'
+[nn_person_detector_node-1] 
+[nn_person_detector_node-1] [INFO] [1775867640.044464791] [nn_person_detector_node]: infer in
+[nn_person_detector_node-1] [INFO] [1775867640.054097667] [nn_person_detector_node]: infer net input
+[nn_person_detector_node-1] [INFO] [1775867640.054958959] [nn_person_detector_node]: infer net out
+[nn_person_detector_node-1] [INFO] [1775867640.054991042] [nn_person_detector_node]: infer net forvard in
+[nn_person_detector_node-1] [ERROR] [1775867640.423404287] [nn_person_detector_node]: OpenCV exception: OpenCV(4.6.0) ./modules/dnn/include/opencv2/dnn/shape_utils.hpp:170: error: (-215:Assertion failed) start <= (int)shape.size() && end <= (int)shape.size() && start <= end in function 'total'

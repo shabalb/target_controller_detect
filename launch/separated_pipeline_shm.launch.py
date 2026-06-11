@@ -46,7 +46,7 @@ def generate_launch_description():
                     {
                         "shm_name": rgb_shm_name,
                         "detection_topic": "/target/detection2d",
-                        "process_fps": 15.0,
+                        "process_fps": 5.0,
                         "show_windows": debug,
                     }
                 ],
@@ -68,7 +68,7 @@ def generate_launch_description():
                         "input_height": 640,
                         "conf_threshold": 0.40,
                         "nms_threshold": 0.45,
-                        "process_fps": 15.0,
+                        "process_fps": 5.0,
                         "dnn_backend": detector_backend,
                         "dnn_target": detector_target,
                         "show_windows": debug,

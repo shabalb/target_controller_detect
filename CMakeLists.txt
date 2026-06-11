@@ -7,6 +7,7 @@ endif()
 
 option(BUILD_COLOR_DETECTOR "Build HSV color detector node" ON)
 option(BUILD_NN_DETECTOR "Build YOLO ONNX detector node" ON)
+set(ONNXRUNTIME_ROOT "/home/s/.local/lib/python3.12/site-packages" CACHE PATH "Path to ONNX Runtime installation")
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -19,6 +20,38 @@ find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(Boost REQUIRED)
+
+if(BUILD_NN_DETECTOR)
+  find_path(ONNXRUNTIME_INCLUDE_DIR
+    NAMES onnxruntime_cxx_api.h
+    HINTS
+      ${ONNXRUNTIME_ROOT}/include
+      ${ONNXRUNTIME_ROOT}/include/onnxruntime
+      /usr/local/include
+      /usr/include
+    PATH_SUFFIXES onnxruntime
+                  onnxruntime/core/session
+  )
+  find_library(ONNXRUNTIME_LIBRARY
+    NAMES onnxruntime libonnxruntime.so.1.26.0 libonnxruntime.so
+    HINTS
+      ${ONNXRUNTIME_ROOT}/lib
+      ${ONNXRUNTIME_ROOT}/lib64
+      ${ONNXRUNTIME_ROOT}/capi
+      /usr/local/lib
+      /usr/local/lib64
+      /usr/lib
+      /usr/lib64
+  )
+  if(NOT ONNXRUNTIME_INCLUDE_DIR OR NOT ONNXRUNTIME_LIBRARY)
+    message(FATAL_ERROR
+      "ONNX Runtime C/C++ development files were not found. The Python wheel is not enough by itself: "
+      "it may provide libonnxruntime.so under onnxruntime/capi, but it does not provide "
+      "onnxruntime_cxx_api.h. Install the ONNX Runtime C/C++ release and build with "
+      "-DONNXRUNTIME_ROOT=/path/to/onnxruntime, or set ONNXRUNTIME_INCLUDE_DIR and "
+      "ONNXRUNTIME_LIBRARY explicitly.")
+  endif()
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -57,6 +90,7 @@ endif()
 
 if(BUILD_NN_DETECTOR)
   add_executable(nn_person_detector_node src/nn_person_detector_node.cpp)
+  target_include_directories(nn_person_detector_node PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
 endif()
 
 ament_target_dependencies(motion_validator rclcpp sensor_msgs geometry_msgs)
@@ -88,7 +122,7 @@ if(BUILD_COLOR_DETECTOR)
 endif()
 
 if(BUILD_NN_DETECTOR)
-  target_link_libraries(nn_person_detector_node ${OpenCV_LIBS} ${Boost_LIBRARIES})
+  target_link_libraries(nn_person_detector_node ${OpenCV_LIBS} ${Boost_LIBRARIES} ${ONNXRUNTIME_LIBRARY})
 endif()
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)

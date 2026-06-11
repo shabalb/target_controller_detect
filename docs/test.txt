@@ -1,0 +1,22 @@
+ros2 launch target_controller_detect separated_pipeline_shm.launch.py
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2026-04-10-21-11-44-757884-ubuntu-2468
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [nn_person_detector_node-1]: process started with pid [2471]
+[INFO] [shm_depth_fusion_node-2]: process started with pid [2472]
+[INFO] [target_controller_node-3]: process started with pid [2473]
+[shm_depth_fusion_node-2] [INFO] [1775855504.924127092] [shm_depth_fusion_node]: Depth SHM: oak_depth
+[shm_depth_fusion_node-2] [INFO] [1775855504.924235592] [shm_depth_fusion_node]: Detection topic: /target/detection2d
+[shm_depth_fusion_node-2] [INFO] [1775855504.924248717] [shm_depth_fusion_node]: State topic: /target/state
+[target_controller_node-3] [INFO] [1775855504.924186008] [target_controller_node]: State topic: /target/state
+[target_controller_node-3] [INFO] [1775855504.924258342] [target_controller_node]: Cmd topic: /cmd_vel
+[target_controller_node-3] [INFO] [1775855504.924268550] [target_controller_node]: Track cmd topic: /target/persecuit
+[nn_person_detector_node-1] [INFO] [1775855505.649093248] [nn_person_detector_node]: Loaded model (/home/ubuntu/robot_ws/install/target_controller_detect/share/target_controller_detect/models/yolov8n.onnx), backend=opencv, target=cpu
+[nn_person_detector_node-1] [INFO] [1775855505.652260748] [nn_person_detector_node]: Input source: shm
+[nn_person_detector_node-1] [INFO] [1775855505.652314415] [nn_person_detector_node]: Camera topic: /unused_ros_image_topic
+[nn_person_detector_node-1] [INFO] [1775855505.652328123] [nn_person_detector_node]: RGB SHM: oak_rgb
+[nn_person_detector_node-1] [INFO] [1775855505.652338040] [nn_person_detector_node]: Detection topic: /target/detection2d
+[nn_person_detector_node-1] [INFO] [1775855505.652351457] [nn_person_detector_node]: Model path: /home/ubuntu/robot_ws/install/target_controller_detect/share/target_controller_detect/models/yolov8n.onnx
+[shm_depth_fusion_node-2] [INFO] [1775855505.691043669] [shm_depth_fusion_node]: Opened depth shared memory: oak_depth
+[target_controller_node-3] [INFO] [1775855505.691546794] [target_controller_node]: Control valid=0 dist=0.000 angle=0.000 cmd=(0.000, 0.070) tracks=(800, 1200)
+[nn_person_detector_node-1] [INFO] [1775855505.719122422] [nn_person_detector_node]: Opened RGB shared memory: oak_rgb
+client_loop: send disconnect: Broken pipe
