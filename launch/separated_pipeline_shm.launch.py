@@ -18,6 +18,7 @@ def generate_launch_description():
     detector_model_path = LaunchConfiguration("detector_model_path")
     detector_backend = LaunchConfiguration("detector_backend")
     detector_target = LaunchConfiguration("detector_target")
+    detector_executable = LaunchConfiguration("detector_executable")
 
     return LaunchDescription(
         [
@@ -36,6 +37,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("detector_backend", default_value="opencv"),
             DeclareLaunchArgument("detector_target", default_value="cpu"),
+            DeclareLaunchArgument("detector_executable", default_value="nn_person_detector_node"),
             Node(
                 package="target_controller_detect",
                 executable="shm_color_detector_node",
@@ -53,7 +55,7 @@ def generate_launch_description():
             ),
             Node(
                 package="target_controller_detect",
-                executable="nn_person_detector_node",
+                executable=detector_executable,
                 name="nn_person_detector_node",
                 output="screen",
                 condition=IfCondition(use_nn_detector),

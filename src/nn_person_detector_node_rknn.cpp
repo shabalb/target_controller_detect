@@ -1,12 +1,15 @@
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <onnxruntime_cxx_api.h>
+#include <rknn_api.h>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -104,35 +107,38 @@ std::vector<int> nmsBoxes(
   return keep;
 }
 
-cv::Mat normalizeDetections(const float *data, const std::vector<int64_t> &shape) {
+cv::Mat normalizeDetections(const float *data, const std::vector<int> &shape) {
   if (data == nullptr || shape.empty()) {
     return {};
   }
 
+  if (shape.size() == 4 && shape[0] == 1) {
+    return normalizeDetections(data, std::vector<int>{shape[1], shape[2], shape[3]});
+  }
+
   if (shape.size() == 3) {
-    const int d1 = static_cast<int>(shape[1]);
-    const int d2 = static_cast<int>(shape[2]);
+    const int d1 = shape[1];
+    const int d2 = shape[2];
     if (d1 <= 0 || d2 <= 0) {
       return {};
     }
 
     cv::Mat tmp(d1, d2, CV_32F, const_cast<float *>(data));
     cv::Mat normalized;
-    // Typical YOLOv8 ONNX output is [1, 84, 8400], transpose to [8400, 84].
     if (d1 < d2 && d1 <= 256) {
       cv::transpose(tmp, normalized);
       return normalized;
     }
-
     return tmp.clone();
   }
 
   if (shape.size() == 2) {
-    const int rows = static_cast<int>(shape[0]);
-    const int cols = static_cast<int>(shape[1]);
+    const int rows = shape[0];
+    const int cols = shape[1];
     if (rows <= 0 || cols <= 0) {
       return {};
     }
+
     cv::Mat tmp(rows, cols, CV_32F, const_cast<float *>(data));
     if (rows < cols && rows <= 256) {
       cv::Mat normalized;
@@ -143,6 +149,15 @@ cv::Mat normalizeDetections(const float *data, const std::vector<int64_t> &shape
   }
 
   return {};
+}
+
+std::vector<int> tensorShape(const rknn_tensor_attr &attr) {
+  std::vector<int> shape;
+  shape.reserve(static_cast<size_t>(attr.n_dims));
+  for (uint32_t i = 0; i < attr.n_dims; ++i) {
+    shape.push_back(static_cast<int>(attr.dims[i]));
+  }
+  return shape;
 }
 
 cv::Mat shmViewToBgr(const target_controller_detect::ShmImageView &view) {
@@ -196,9 +211,9 @@ cv::Mat shmViewToBgr(const target_controller_detect::ShmImageView &view) {
 
 }  // namespace
 
-class NnPersonDetectorNode : public rclcpp::Node {
+class NnPersonDetectorRknnNode : public rclcpp::Node {
 public:
-  NnPersonDetectorNode() : Node("nn_person_detector_node") {
+  NnPersonDetectorRknnNode() : Node("nn_person_detector_node") {
     input_source_ = declare_parameter<std::string>("input_source", "ros");
     shm_name_ = declare_parameter<std::string>("shm_name", "oak_rgb");
     const auto camera_topic = declare_parameter<std::string>("camera_topic", "/camera/image");
@@ -210,15 +225,10 @@ public:
     conf_threshold_ = declare_parameter<double>("conf_threshold", 0.40);
     nms_threshold_ = declare_parameter<double>("nms_threshold", 0.45);
     process_fps_ = declare_parameter<double>("process_fps", 15.0);
-    NumTreadsCPU = declare_parameter<int>("NumTreadsCPU", 1);
     grid_cols_ = declare_parameter<int>("grid_cols", 30);
     grid_rows_ = declare_parameter<int>("grid_rows", 30);
     show_windows_ = declare_parameter<bool>("show_windows", false);
     self_test_once_ = declare_parameter<bool>("self_test_once", false);
-    
-
-    declare_parameter<std::string>("dnn_backend", "onnxruntime");
-    declare_parameter<std::string>("dnn_target", "cpu");
 
     loadModel();
 
@@ -230,10 +240,10 @@ public:
       const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, process_fps_));
       timer_ = create_wall_timer(
         std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-        std::bind(&NnPersonDetectorNode::onTimer, this));
+        std::bind(&NnPersonDetectorRknnNode::onTimer, this));
     } else {
       image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-        camera_topic, qos, std::bind(&NnPersonDetectorNode::onImage, this, std::placeholders::_1));
+        camera_topic, qos, std::bind(&NnPersonDetectorRknnNode::onImage, this, std::placeholders::_1));
     }
 
     if (show_windows_) {
@@ -244,14 +254,17 @@ public:
     RCLCPP_INFO(get_logger(), "Camera topic: %s", camera_topic.c_str());
     RCLCPP_INFO(get_logger(), "RGB SHM: %s", shm_name_.c_str());
     RCLCPP_INFO(get_logger(), "Detection topic: %s", detection_topic_.c_str());
-    RCLCPP_INFO(get_logger(), "Model path: %s", model_path_.c_str());
+    RCLCPP_INFO(get_logger(), "RKNN model path: %s", model_path_.c_str());
 
     if (self_test_once_) {
       runSelfTest();
     }
   }
 
-  ~NnPersonDetectorNode() override {
+  ~NnPersonDetectorRknnNode() override {
+    if (ctx_ != 0) {
+      rknn_destroy(ctx_);
+    }
     if (show_windows_) {
       cv::destroyWindow("nn_detector_camera");
     }
@@ -281,36 +294,124 @@ private:
       return;
     }
 
-    try {
-      Ort::SessionOptions session_options;
-      session_options.SetIntraOpNumThreads(NumTreadsCPU);
-      session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+    std::ifstream file(model_path_, std::ios::binary);
+    if (!file) {
+      RCLCPP_ERROR(get_logger(), "Failed to open RKNN model: %s", model_path_.c_str());
+      return;
+    }
+    model_data_ = std::vector<unsigned char>(
+      std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    if (model_data_.empty()) {
+      RCLCPP_ERROR(get_logger(), "RKNN model is empty: %s", model_path_.c_str());
+      return;
+    }
 
-      session_ = std::make_unique<Ort::Session>(ort_env_, model_path_.c_str(), session_options);
+    int ret = rknn_init(&ctx_, model_data_.data(), model_data_.size(), 0, nullptr);
+    if (ret != RKNN_SUCC) {
+      RCLCPP_ERROR(get_logger(), "rknn_init failed: %d", ret);
+      ctx_ = 0;
+      return;
+    }
 
-      Ort::AllocatorWithDefaultOptions allocator;
-      input_name_allocs_.push_back(session_->GetInputNameAllocated(0, allocator));
-      input_names_.push_back(input_name_allocs_.back().get());
+    ret = rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num_, sizeof(io_num_));
+    if (ret != RKNN_SUCC || io_num_.n_input < 1 || io_num_.n_output < 1) {
+      RCLCPP_ERROR(get_logger(), "rknn_query RKNN_QUERY_IN_OUT_NUM failed: %d", ret);
+      return;
+    }
 
-      const size_t output_count = session_->GetOutputCount();
-      output_name_allocs_.reserve(output_count);
-      output_names_.reserve(output_count);
-      for (size_t i = 0; i < output_count; ++i) {
-        output_name_allocs_.push_back(session_->GetOutputNameAllocated(i, allocator));
-        output_names_.push_back(output_name_allocs_.back().get());
+    input_attrs_.resize(io_num_.n_input);
+    for (uint32_t i = 0; i < io_num_.n_input; ++i) {
+      std::memset(&input_attrs_[i], 0, sizeof(rknn_tensor_attr));
+      input_attrs_[i].index = i;
+      ret = rknn_query(ctx_, RKNN_QUERY_INPUT_ATTR, &input_attrs_[i], sizeof(rknn_tensor_attr));
+      if (ret != RKNN_SUCC) {
+        RCLCPP_ERROR(get_logger(), "rknn_query input attr %u failed: %d", i, ret);
+        return;
       }
+    }
 
-      model_ready_ = true;
-      RCLCPP_INFO(get_logger(), "Loaded ONNX Runtime model: %s", model_path_.c_str());
-    } catch (const Ort::Exception &e) {
-      RCLCPP_ERROR(get_logger(), "Failed to load ONNX model '%s': %s", model_path_.c_str(), e.what());
-      model_ready_ = false;
+    output_attrs_.resize(io_num_.n_output);
+    for (uint32_t i = 0; i < io_num_.n_output; ++i) {
+      std::memset(&output_attrs_[i], 0, sizeof(rknn_tensor_attr));
+      output_attrs_[i].index = i;
+      ret = rknn_query(ctx_, RKNN_QUERY_OUTPUT_ATTR, &output_attrs_[i], sizeof(rknn_tensor_attr));
+      if (ret != RKNN_SUCC) {
+        RCLCPP_ERROR(get_logger(), "rknn_query output attr %u failed: %d", i, ret);
+        return;
+      }
+    }
+
+    updateInputSizeFromModel();
+    model_ready_ = true;
+    RCLCPP_INFO(
+      get_logger(), "Loaded RKNN model: %s inputs=%u outputs=%u input=%dx%d",
+      model_path_.c_str(), io_num_.n_input, io_num_.n_output, input_width_, input_height_);
+  }
+
+  void updateInputSizeFromModel() {
+    if (input_attrs_.empty() || input_attrs_[0].n_dims < 4) {
+      return;
+    }
+
+    const auto &attr = input_attrs_[0];
+    if (attr.fmt == RKNN_TENSOR_NCHW) {
+      input_height_ = static_cast<int>(attr.dims[2]);
+      input_width_ = static_cast<int>(attr.dims[3]);
+    } else {
+      input_height_ = static_cast<int>(attr.dims[1]);
+      input_width_ = static_cast<int>(attr.dims[2]);
     }
   }
 
-  void publishDetection(
-    const cv::Mat &bgr,
-    const std_msgs::msg::Header &header) {
+  void fillInput(const cv::Mat &rgb) {
+    if (!input_attrs_.empty() && input_attrs_[0].type == RKNN_TENSOR_FLOAT32) {
+      input_float_values_.resize(static_cast<size_t>(input_width_ * input_height_ * 3));
+      if (!input_attrs_.empty() && input_attrs_[0].fmt == RKNN_TENSOR_NCHW) {
+        const size_t plane = static_cast<size_t>(input_width_ * input_height_);
+        for (int y = 0; y < input_height_; ++y) {
+          const auto *row = rgb.ptr<cv::Vec3b>(y);
+          for (int x = 0; x < input_width_; ++x) {
+            const auto &px = row[x];
+            const size_t offset = static_cast<size_t>(y * input_width_ + x);
+            input_float_values_[offset] = static_cast<float>(px[0]) / 255.0f;
+            input_float_values_[plane + offset] = static_cast<float>(px[1]) / 255.0f;
+            input_float_values_[2 * plane + offset] = static_cast<float>(px[2]) / 255.0f;
+          }
+        }
+      } else {
+        for (int y = 0; y < input_height_; ++y) {
+          const auto *row = rgb.ptr<cv::Vec3b>(y);
+          for (int x = 0; x < input_width_; ++x) {
+            const auto &px = row[x];
+            const size_t offset = static_cast<size_t>((y * input_width_ + x) * 3);
+            input_float_values_[offset] = static_cast<float>(px[0]) / 255.0f;
+            input_float_values_[offset + 1] = static_cast<float>(px[1]) / 255.0f;
+            input_float_values_[offset + 2] = static_cast<float>(px[2]) / 255.0f;
+          }
+        }
+      }
+      return;
+    }
+
+    input_u8_values_.resize(static_cast<size_t>(input_width_ * input_height_ * 3));
+    if (!input_attrs_.empty() && input_attrs_[0].fmt == RKNN_TENSOR_NCHW) {
+      const size_t plane = static_cast<size_t>(input_width_ * input_height_);
+      for (int y = 0; y < input_height_; ++y) {
+        const auto *row = rgb.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < input_width_; ++x) {
+          const auto &px = row[x];
+          const size_t offset = static_cast<size_t>(y * input_width_ + x);
+          input_u8_values_[offset] = px[0];
+          input_u8_values_[plane + offset] = px[1];
+          input_u8_values_[2 * plane + offset] = px[2];
+        }
+      }
+    } else {
+      std::memcpy(input_u8_values_.data(), rgb.data, input_u8_values_.size());
+    }
+  }
+
+  void publishDetection(const cv::Mat &bgr, const std_msgs::msg::Header &header) {
     auto detection = infer(bgr, header);
     detection_pub_->publish(detection);
 
@@ -327,14 +428,14 @@ private:
       }
 
       cv::putText(
-        debug, "nn detector", cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX, 0.7,
+        debug, "rknn detector", cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX, 0.7,
         cv::Scalar(0, 255, 255), 2);
       cv::imshow("nn_detector_camera", debug);
       cv::waitKey(1);
     }
 
     RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 1000, "NN detection found=%d center=(%.1f, %.1f) score=%.3f",
+      get_logger(), *get_clock(), 1000, "RKNN detection found=%d center=(%.1f, %.1f) score=%.3f",
       detection.found, detection.center_x, detection.center_y, detection.score);
   }
 
@@ -387,73 +488,62 @@ private:
     }
 
     auto lb = makeLetterbox(bgr, input_width_, input_height_);
+    cv::Mat rgb;
+    cv::cvtColor(lb.image, rgb, cv::COLOR_BGR2RGB);
+    fillInput(rgb);
 
-    input_tensor_values_.resize(static_cast<size_t>(3 * input_width_ * input_height_));
-    for (int y = 0; y < input_height_; ++y) {
-      const auto *row = lb.image.ptr<cv::Vec3b>(y);
-      for (int x = 0; x < input_width_; ++x) {
-        const auto &bgr_px = row[x];
-        const size_t offset = static_cast<size_t>(y * input_width_ + x);
-        input_tensor_values_[offset] = static_cast<float>(bgr_px[2]) / 255.0f;
-        input_tensor_values_[static_cast<size_t>(input_width_ * input_height_) + offset] =
-          static_cast<float>(bgr_px[1]) / 255.0f;
-        input_tensor_values_[static_cast<size_t>(2 * input_width_ * input_height_) + offset] =
-          static_cast<float>(bgr_px[0]) / 255.0f;
-      }
+    rknn_input input;
+    std::memset(&input, 0, sizeof(input));
+    input.index = 0;
+    input.fmt = input_attrs_.empty() ? RKNN_TENSOR_NHWC : input_attrs_[0].fmt;
+    input.type = input_attrs_.empty() ? RKNN_TENSOR_UINT8 : input_attrs_[0].type;
+    if (input.type == RKNN_TENSOR_FLOAT32) {
+      input.size = input_float_values_.size() * sizeof(float);
+      input.buf = input_float_values_.data();
+    } else {
+      input.type = RKNN_TENSOR_UINT8;
+      input.size = input_u8_values_.size();
+      input.buf = input_u8_values_.data();
     }
 
-    const std::array<int64_t, 4> input_shape{
-      1, 3, static_cast<int64_t>(input_height_), static_cast<int64_t>(input_width_)};
-
-    auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    auto input_tensor = Ort::Value::CreateTensor<float>(
-      memory_info, input_tensor_values_.data(), input_tensor_values_.size(),
-      input_shape.data(), input_shape.size());
-
-    //RCLCPP_INFO(get_logger(), "infer ONNX Runtime run in");
-    std::vector<Ort::Value> output_tensors;
-    try {
-      output_tensors = session_->Run(
-        Ort::RunOptions{nullptr},
-        input_names_.data(),
-        &input_tensor,
-        1,
-        output_names_.data(),
-        output_names_.size());
-      forward_error_count_ = 0;
-    } catch (const Ort::Exception &exc) {
-      ++forward_error_count_;
-      RCLCPP_ERROR(
-        get_logger(), "ONNX Runtime inference failed (%d/3): %s", forward_error_count_, exc.what());
-      if (forward_error_count_ >= 3) {
-        model_ready_ = false;
-        RCLCPP_ERROR(
-          get_logger(),
-          "Disabling NN model after repeated ONNX Runtime inference failures.");
-      }
-      return detection;
-    }
-    //RCLCPP_INFO(get_logger(), "infer ONNX Runtime run out");
-    if (output_tensors.empty() || !output_tensors.front().IsTensor()) {
+    int ret = rknn_inputs_set(ctx_, 1, &input);
+    if (ret != RKNN_SUCC) {
+      RCLCPP_ERROR(get_logger(), "rknn_inputs_set failed: %d", ret);
       return detection;
     }
 
-    const auto output_info = output_tensors.front().GetTensorTypeAndShapeInfo();
-    const auto output_shape = output_info.GetShape();
-    const float *output_data = output_tensors.front().GetTensorData<float>();
+    ret = rknn_run(ctx_, nullptr);
+    if (ret != RKNN_SUCC) {
+      RCLCPP_ERROR(get_logger(), "rknn_run failed: %d", ret);
+      return detection;
+    }
+
+    std::vector<rknn_output> outputs(output_attrs_.size());
+    for (auto &output : outputs) {
+      std::memset(&output, 0, sizeof(rknn_output));
+      output.want_float = 1;
+      output.is_prealloc = 0;
+    }
+
+    ret = rknn_outputs_get(ctx_, static_cast<uint32_t>(outputs.size()), outputs.data(), nullptr);
+    if (ret != RKNN_SUCC) {
+      RCLCPP_ERROR(get_logger(), "rknn_outputs_get failed: %d", ret);
+      return detection;
+    }
+
+    const float *output_data = outputs.empty() ? nullptr : static_cast<const float *>(outputs[0].buf);
+    const std::vector<int> output_shape = output_attrs_.empty() ? std::vector<int>{} : tensorShape(output_attrs_[0]);
     const cv::Mat det = normalizeDetections(output_data, output_shape);
+
+    rknn_outputs_release(ctx_, static_cast<uint32_t>(outputs.size()), outputs.data());
+
     if (det.empty() || det.cols < 5) {
-      return detection;
-    }
-
-    const int person_col = 4;  // COCO class 0 (person) in YOLOv8 => column 4 + 0.
-    if (person_col >= det.cols) {
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000,
-        "Detector output has unexpected shape (%d x %d)", det.rows, det.cols);
+        get_logger(), *get_clock(), 2000, "RKNN output has unsupported shape; expected YOLOv8 [1,84,8400]");
       return detection;
     }
 
+    const int person_col = 4;
     std::vector<cv::Rect> boxes;
     std::vector<float> scores;
     boxes.reserve(static_cast<size_t>(det.rows));
@@ -572,11 +662,10 @@ private:
     header.frame_id = "self_test_frame";
 
     cv::Mat test_image(480, 640, CV_8UC3, cv::Scalar(0, 0, 0));
-    RCLCPP_INFO(get_logger(), "Running ONNX Runtime self-test without camera");
+    RCLCPP_INFO(get_logger(), "Running RKNN self-test without camera");
     auto detection = infer(test_image, header);
     RCLCPP_INFO(
-      get_logger(),
-      "ONNX Runtime self-test finished: model_ready=%d found=%d score=%.3f",
+      get_logger(), "RKNN self-test finished: model_ready=%d found=%d score=%.3f",
       model_ready_, detection.found, detection.score);
   }
 
@@ -594,18 +683,16 @@ private:
   double nms_threshold_{0.45};
   bool show_windows_{false};
   bool self_test_once_{false};
-  int NumTreadsCPU{1};
   std::uint64_t last_seq_{0};
 
   bool model_ready_{false};
-  int forward_error_count_{0};
-  Ort::Env ort_env_{ORT_LOGGING_LEVEL_WARNING, "nn_person_detector_node"};
-  std::unique_ptr<Ort::Session> session_;
-  std::vector<float> input_tensor_values_;
-  std::vector<Ort::AllocatedStringPtr> input_name_allocs_;
-  std::vector<Ort::AllocatedStringPtr> output_name_allocs_;
-  std::vector<const char *> input_names_;
-  std::vector<const char *> output_names_;
+  rknn_context ctx_{0};
+  rknn_input_output_num io_num_{};
+  std::vector<unsigned char> model_data_;
+  std::vector<rknn_tensor_attr> input_attrs_;
+  std::vector<rknn_tensor_attr> output_attrs_;
+  std::vector<std::uint8_t> input_u8_values_;
+  std::vector<float> input_float_values_;
   std::unique_ptr<target_controller_detect::ShmImageRingReader> reader_;
 
   rclcpp::Publisher<target_controller_detect::msg::Detection2D>::SharedPtr detection_pub_;
@@ -615,7 +702,7 @@ private:
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<NnPersonDetectorNode>());
+  rclcpp::spin(std::make_shared<NnPersonDetectorRknnNode>());
   rclcpp::shutdown();
   return 0;
 }

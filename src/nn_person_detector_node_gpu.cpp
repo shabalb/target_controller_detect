@@ -210,13 +210,10 @@ public:
     conf_threshold_ = declare_parameter<double>("conf_threshold", 0.40);
     nms_threshold_ = declare_parameter<double>("nms_threshold", 0.45);
     process_fps_ = declare_parameter<double>("process_fps", 15.0);
-    NumTreadsCPU = declare_parameter<int>("NumTreadsCPU", 1);
     grid_cols_ = declare_parameter<int>("grid_cols", 30);
     grid_rows_ = declare_parameter<int>("grid_rows", 30);
     show_windows_ = declare_parameter<bool>("show_windows", false);
     self_test_once_ = declare_parameter<bool>("self_test_once", false);
-    
-
     declare_parameter<std::string>("dnn_backend", "onnxruntime");
     declare_parameter<std::string>("dnn_target", "cpu");
 
@@ -283,7 +280,7 @@ private:
 
     try {
       Ort::SessionOptions session_options;
-      session_options.SetIntraOpNumThreads(NumTreadsCPU);
+      session_options.SetIntraOpNumThreads(1);
       session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
 
       session_ = std::make_unique<Ort::Session>(ort_env_, model_path_.c_str(), session_options);
@@ -410,7 +407,7 @@ private:
       memory_info, input_tensor_values_.data(), input_tensor_values_.size(),
       input_shape.data(), input_shape.size());
 
-    //RCLCPP_INFO(get_logger(), "infer ONNX Runtime run in");
+    RCLCPP_INFO(get_logger(), "infer ONNX Runtime run in");
     std::vector<Ort::Value> output_tensors;
     try {
       output_tensors = session_->Run(
@@ -433,7 +430,7 @@ private:
       }
       return detection;
     }
-    //RCLCPP_INFO(get_logger(), "infer ONNX Runtime run out");
+    RCLCPP_INFO(get_logger(), "infer ONNX Runtime run out");
     if (output_tensors.empty() || !output_tensors.front().IsTensor()) {
       return detection;
     }
@@ -594,7 +591,6 @@ private:
   double nms_threshold_{0.45};
   bool show_windows_{false};
   bool self_test_once_{false};
-  int NumTreadsCPU{1};
   std::uint64_t last_seq_{0};
 
   bool model_ready_{false};

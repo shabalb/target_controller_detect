@@ -7,7 +7,9 @@ endif()
 
 option(BUILD_COLOR_DETECTOR "Build HSV color detector node" ON)
 option(BUILD_NN_DETECTOR "Build YOLO ONNX detector node" ON)
+option(BUILD_RKNN_DETECTOR "Build YOLO RKNN detector node for Rockchip NPU" OFF)
 set(ONNXRUNTIME_ROOT "/home/s/.local/lib/python3.12/site-packages" CACHE PATH "Path to ONNX Runtime installation")
+set(RKNN_ROOT "" CACHE PATH "Path to RKNN Runtime installation")
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -53,6 +55,32 @@ if(BUILD_NN_DETECTOR)
   endif()
 endif()
 
+if(BUILD_RKNN_DETECTOR)
+  find_path(RKNN_INCLUDE_DIR
+    NAMES rknn_api.h
+    HINTS
+      ${RKNN_ROOT}/include
+      ${RKNN_ROOT}/runtime/Linux/librknn_api/include
+      /usr/include
+      /usr/local/include
+  )
+  find_library(RKNN_LIBRARY
+    NAMES rknnrt librknnrt.so
+    HINTS
+      ${RKNN_ROOT}/lib
+      ${RKNN_ROOT}/lib64
+      ${RKNN_ROOT}/runtime/Linux/librknn_api/aarch64
+      /usr/lib
+      /usr/local/lib
+      /usr/lib/aarch64-linux-gnu
+  )
+  if(NOT RKNN_INCLUDE_DIR OR NOT RKNN_LIBRARY)
+    message(FATAL_ERROR
+      "RKNN Runtime files were not found. Install Rockchip RKNN Runtime on the Radxa, "
+      "or build with -DRKNN_ROOT=/path/to/rknn-toolkit2/rknpu2/runtime/Linux/librknn_api.")
+  endif()
+endif()
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
@@ -93,6 +121,11 @@ if(BUILD_NN_DETECTOR)
   target_include_directories(nn_person_detector_node PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
 endif()
 
+if(BUILD_RKNN_DETECTOR)
+  add_executable(nn_person_detector_node_rknn src/nn_person_detector_node_rknn.cpp)
+  target_include_directories(nn_person_detector_node_rknn PRIVATE ${RKNN_INCLUDE_DIR})
+endif()
+
 ament_target_dependencies(motion_validator rclcpp sensor_msgs geometry_msgs)
 ament_target_dependencies(target_fusion_node rclcpp sensor_msgs std_msgs)
 ament_target_dependencies(target_controller_node rclcpp geometry_msgs std_msgs)
@@ -106,6 +139,10 @@ endif()
 
 if(BUILD_NN_DETECTOR)
   ament_target_dependencies(nn_person_detector_node rclcpp sensor_msgs cv_bridge std_msgs)
+endif()
+
+if(BUILD_RKNN_DETECTOR)
+  ament_target_dependencies(nn_person_detector_node_rknn rclcpp sensor_msgs cv_bridge std_msgs)
 endif()
 
 include_directories(${OpenCV_INCLUDE_DIRS})
@@ -125,6 +162,10 @@ if(BUILD_NN_DETECTOR)
   target_link_libraries(nn_person_detector_node ${OpenCV_LIBS} ${Boost_LIBRARIES} ${ONNXRUNTIME_LIBRARY})
 endif()
 
+if(BUILD_RKNN_DETECTOR)
+  target_link_libraries(nn_person_detector_node_rknn ${OpenCV_LIBS} ${Boost_LIBRARIES} ${RKNN_LIBRARY})
+endif()
+
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
 target_link_libraries(target_fusion_node "${cpp_typesupport_target}")
 target_link_libraries(target_controller_node "${cpp_typesupport_target}")
@@ -140,6 +181,10 @@ if(BUILD_NN_DETECTOR)
   target_link_libraries(nn_person_detector_node "${cpp_typesupport_target}")
 endif()
 
+if(BUILD_RKNN_DETECTOR)
+  target_link_libraries(nn_person_detector_node_rknn "${cpp_typesupport_target}")
+endif()
+
 install(TARGETS motion_validator
   DESTINATION lib/${PROJECT_NAME})
 
@@ -150,6 +195,11 @@ endif()
 
 if(BUILD_NN_DETECTOR)
   install(TARGETS nn_person_detector_node
+    DESTINATION lib/${PROJECT_NAME})
+endif()
+
+if(BUILD_RKNN_DETECTOR)
+  install(TARGETS nn_person_detector_node_rknn
     DESTINATION lib/${PROJECT_NAME})
 endif()
 
